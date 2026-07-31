@@ -349,6 +349,47 @@ int main(void) {
     printf("  short-hist insufficient=%d fire=%d\n", (int)r.insufficient_data, (int)r.fire);
     assert(!r.insufficient_data);
     assert(r.fire);
+
+    // The fallback path must be trustworthy across sensitivities, not just at
+    // the one percentile happened to be tested above: at P95 the same night's
+    // trigger level rises to exactly the stir's own magnitude (900), so it
+    // correctly does NOT fire -- still with real data (insufficient_data must
+    // stay false), not a collapse back to "not enough data".
+    SleepEvalCfg c95 = cfg_for(95, 2);
+    SleepEvalResult r95 = se_evaluate(g_s, CNT, WS, false, &c95);
+    printf("  short-hist@P95 insufficient=%d level=%u fire=%d\n",
+           (int)r95.insufficient_data, r95.trigger_level, (int)r95.fire);
+    assert(!r95.insufficient_data);
+    assert(!r95.fire);
+  }
+
+  // --- a wake episode with a dropped (is_invalid) sample every few minutes
+  // must still be excluded as a whole: an invalid minute is BRIDGED in the
+  // run scan (it neither extends nor breaks a run), because it is already
+  // absent from the ranking population either way. Breaking on it instead
+  // would fragment a genuine hour-long thrash into runs individually too
+  // short to exclude, reinstating the exact contamination this deviation
+  // exists to remove -- and a dropped sample every 10th minute is ordinary
+  // firmware behaviour (watch off the wrist, patchy health data), not a
+  // contrived input. ---
+  {
+    g_seed = 6;
+    fill_rest(N, 30, 10);
+    for (int i = 30; i < 90; i++) {
+      g_s[i].vmc = 2500;
+      if ((i - 30) % 10 == 9) {
+        g_s[i].is_invalid = true;   // one dropped sample every 10 minutes
+      }
+    }
+    for (int i = WIN + 5; i < WIN + 11; i++) {
+      g_s[i].vmc = 900;
+    }
+    SleepEvalCfg c = cfg_for(90, 2);
+    SleepEvalResult r = se_evaluate(g_s, N, WIN, false, &c);
+    printf("  invalid-bridge base=%u level=%u fire=%d\n",
+           r.baseline, r.trigger_level, (int)r.fire);
+    assert(r.baseline < 100);
+    assert(r.fire);
   }
 
   printf("test_sleep_eval: all assertions passed\n");

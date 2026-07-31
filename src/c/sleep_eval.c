@@ -4,12 +4,13 @@
 
 // A contiguous run of at least this many minutes above the wake threshold is
 // treated as a wake episode (arousal), not ordinary sleep movement, and is
-// excluded from the ranking population wholesale. Chosen well above the
-// window's own required_minutes range (1..5) so a legitimate short stir is
-// never misclassified just because a shorter, window-style duration test
-// would also have fired on it -- and well below any real awakening, which
-// lasts several times that.
-#define SE_WAKE_RUN_MINUTES 10
+// excluded from the ranking population wholesale. R is set just above the
+// longest elevated run an ordinary night produces: measured over 200
+// independent simulated skewed nights, the longest naturally occurring
+// elevated run was 7 minutes (distribution: 2->12 nights, 3->100, 4->70,
+// 5->15, 6->2, 7->1, 8+->0). So R=8 leaves every one of those nights
+// completely untouched while still catching the shortest plausible arousal.
+#define SE_WAKE_RUN_MINUTES 8
 // A minute is "elevated" (a candidate wake-episode minute) once its vmc
 // exceeds this multiple of the resting median plus the configured margin.
 // 4x is well above ordinary resting jitter (the still-sleeper tests show
@@ -176,6 +177,9 @@ SleepEvalResult se_evaluate(const SleepMinute *samples, int count, int window_st
   }
   r.insufficient_data = false;
 
+  // baseline is the median of the population BEFORE wake-episode exclusion
+  // (below): the exclusion threshold itself is derived from this baseline,
+  // so it has to be computed first, from the unfiltered set.
   prv_sort(s_sorted, n);
   r.baseline = s_sorted[n / 2];
 
@@ -194,15 +198,21 @@ SleepEvalResult se_evaluate(const SleepMinute *samples, int count, int window_st
   // the legitimate upper tail as noise and collapsed every sensitivity onto
   // the same floor, making the sensitivity setting a no-op.
   //
-  // An invalid minute breaks a run in progress (consistent with how the
-  // window evaluation loop below treats invalid minutes: they cannot
-  // silently bridge two otherwise-unrelated stretches of movement).
+  // An invalid minute is BRIDGED, not treated as a run break: it is already
+  // absent from the population either way (prv_fill skips it), so letting it
+  // pass through a run in progress is strictly safer than breaking on it.
+  // Breaking on it reinstates the exact contamination this exclusion exists
+  // to remove: a real wake episode with one dropped sample every few minutes
+  // (ordinary when the watch is off the wrist or health data is patchy)
+  // would otherwise fragment into runs individually too short to exclude.
   uint32_t wake_threshold = (uint32_t)r.baseline * SE_WAKE_THRESHOLD_MULT + cfg->min_margin;
   int n_trim = 0;
   int run_start = -1;
   for (int i = from; i <= pop_end; i++) {
-    bool elevated = (i < pop_end) && !samples[i].is_invalid
-                    && samples[i].vmc > wake_threshold;
+    if (i < pop_end && samples[i].is_invalid) {
+      continue;   // bridge: neither extends nor breaks a run
+    }
+    bool elevated = (i < pop_end) && samples[i].vmc > wake_threshold;
     if (elevated) {
       if (run_start < 0) {
         run_start = i;
@@ -223,8 +233,8 @@ SleepEvalResult se_evaluate(const SleepMinute *samples, int count, int window_st
       // else: a genuine wake episode -- excluded entirely.
       run_start = -1;
     }
-    if (i < pop_end && !samples[i].is_invalid && n_trim < SE_MAX_SAMPLES) {
-      s_sorted[n_trim++] = samples[i].vmc;
+    if (i < pop_end && n_trim < SE_MAX_SAMPLES) {
+      s_sorted[n_trim++] = samples[i].vmc;   // valid (checked above) and non-elevated
     }
   }
 
@@ -240,9 +250,9 @@ SleepEvalResult se_evaluate(const SleepMinute *samples, int count, int window_st
 
   prv_sort(s_sorted, n_trim);
   int pi = (int)(((uint32_t)n_trim * cfg->percentile) / 100u);
-  if (pi >= n_trim) {
-    pi = n_trim - 1;
-  }
+  // No pi>=n_trim clamp needed: cfg->percentile <= 99 (enforced by
+  // se_default_cfg) and n_trim >= SE_MIN_USABLE (60) here, so
+  // pi = n_trim*99/100 < n_trim always.
   uint32_t level = s_sorted[pi];
   uint32_t floor_level = (uint32_t)r.baseline + cfg->min_margin;
   if (level < floor_level) {

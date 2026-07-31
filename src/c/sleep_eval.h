@@ -35,10 +35,13 @@ typedef struct {
 typedef struct {
   bool     fire;
   int      fired_index;       // index into samples, -1 when not firing
-  uint16_t baseline;          // median vmc of the ranking population: the
-                              // history strictly before the alarm window
-                              // (or the whole recorded stretch, if that
-                              // history alone was too thin -- see SE_MIN_USABLE)
+  uint16_t baseline;          // median vmc of the ranking population (the
+                              // history strictly before the alarm window, or
+                              // the whole recorded stretch if that history
+                              // alone was too thin -- see SE_MIN_USABLE),
+                              // taken BEFORE wake-episode exclusion: the
+                              // exclusion threshold is derived from this
+                              // baseline, so it has to come first
   uint16_t trigger_level;
   uint32_t acc;               // accumulator value at the fire point (or final)
   bool     insufficient_data;
