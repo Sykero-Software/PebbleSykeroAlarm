@@ -433,24 +433,43 @@ int main(void) {
     assert(r.fire);
   }
 
-  // --- the four percentiles the Last night summary shows, on a night where they
-  // genuinely differ. Lower percentile => fires no later.
+  // --- the four percentiles the Last night summary shows, on a night with
+  // background jitter (200) well ABOVE min_margin (25) so the four trigger
+  // levels genuinely separate instead of all landing on the baseline+
+  // min_margin floor. (jitter=25 -- exactly min_margin -- was tried first and
+  // collapsed all four onto trigger_level=82/fired_index=454: the floor
+  // dominates whenever the population's own spread is <= min_margin, so a
+  // fixture built that way can never fail even if percentile differentiation
+  // regresses completely -- the exact "every sensitivity collapses to one
+  // answer" failure mode Task 10 fixed. Caught in review; see
+  // task-12-report.md.) Lower percentile => fires no later, AND at least one
+  // pair must fire STRICTLY earlier, or the test would pass just as happily
+  // on a fixture where the four settings never actually differ.
   {
     g_seed = 42;
-    fill_rest(N, 45, 25);
+    fill_rest(N, 45, 200);
     for (int i = WIN + 3;  i < WIN + 8;  i++) g_s[i].vmc = 250;
     for (int i = WIN + 12; i < WIN + 17; i++) g_s[i].vmc = 700;
     for (int i = WIN + 22; i < WIN + 28; i++) g_s[i].vmc = 2000;
     const uint8_t summary_pcts[4] = { 75, 82, 90, 95 };
     int prev = -1;
+    bool any_strict = false;
     for (int k = 0; k < 4; k++) {
       SleepEvalCfg c = cfg_for(summary_pcts[k], 2);
       SleepEvalResult r = se_evaluate(g_s, N, WIN, false, &c);
       int at = r.fire ? r.fired_index : 1 << 30;
-      printf("  summary P%-2u at=%d\n", summary_pcts[k], r.fire ? r.fired_index : -1);
+      printf("  summary P%-2u trig=%u at=%d\n", summary_pcts[k], r.trigger_level,
+             r.fire ? r.fired_index : -1);
       assert(at >= prev);
+      if (k > 0 && at > prev) {
+        any_strict = true;
+      }
       prev = at;
     }
+    // Not just non-decreasing: genuinely discriminating. A test that only
+    // asserts >= would pass identically whether the four sensitivities differ
+    // or have collapsed onto one answer -- exactly what jitter=25 above did.
+    assert(any_strict);
   }
 
   printf("test_sleep_eval: all assertions passed\n");

@@ -274,8 +274,26 @@ static void fmt_hhmm(uint16_t minute_of_day, char *out, size_t n) {
   }
 }
 
+// Appends a formatted chunk to s_night_buf at `off`, then clamps `off` so it
+// can never run past sizeof(s_night_buf) even if NIGHT_HISTORY grows enough
+// to make the worst case exceed the buffer -- today's worst case (~350 B
+// against 640) can't reach it, but the bare `off += snprintf(...)`
+// accumulation this replaces would otherwise silently walk s_night_buf + off
+// out of bounds if it ever did. vsnprintf is blocked on this SDK
+// (pebble_warn_unsupported_functions.h), so this stays a macro around
+// snprintf rather than a va_list helper.
+#define NIGHT_APPEND(...) do { \
+    off += (size_t)snprintf(s_night_buf + off, sizeof(s_night_buf) - off, __VA_ARGS__); \
+    if (off > sizeof(s_night_buf)) { off = sizeof(s_night_buf); } \
+  } while (0)
+
 static void build_night_text(void) {
-  NightSummary ns[NIGHT_HISTORY];
+  // static, not a local: NIGHT_HISTORY(7) * sizeof(NightSummary)(32) = 224
+  // bytes against the ~2 KB app stack -- squarely the "couple hundred bytes"
+  // class that produced App fault! PC:0 LR:0 on hardware in the sibling apps.
+  // build_night_text runs from a single window-load callback (single-threaded
+  // event loop), so a non-reentrant buffer is safe, same as as_push_night's.
+  static NightSummary ns[NIGHT_HISTORY];
   int n = as_load_nights(ns, NIGHT_HISTORY);
   size_t off = 0;
   s_night_buf[0] = '\0';
@@ -291,33 +309,33 @@ static void build_night_text(void) {
   fmt_hhmm(t->fired_min, fired, sizeof(fired));
 
   if (t->smart_unavailable) {
-    off += snprintf(s_night_buf + off, sizeof(s_night_buf) - off,
+    NIGHT_APPEND(
         "Last night\n\nSmart alarm was unavailable.\nCheck that activity "
         "tracking is on in the watch settings.\n");
   } else {
-    off += snprintf(s_night_buf + off, sizeof(s_night_buf) - off,
+    // fired_min is ALWAYS the real ring instant (never NIGHT_NO_FIRE); which
+    // label applies is carried separately in fired_by_deadline, so this never
+    // renders as a label with a blank time.
+    NIGHT_APPEND(
         "Last night\n\nAsleep from %s\nBaseline %u\nLevel %u\n%s %s\n",
         onset, t->baseline, t->trigger_level,
-        t->fired_min == NIGHT_NO_FIRE ? "Deadline at" : "Woke you at", fired);
-    off += snprintf(s_night_buf + off, sizeof(s_night_buf) - off,
-        "\nAt other sensitivities:\n");
+        t->fired_by_deadline ? "Deadline at" : "Woke you at", fired);
+    NIGHT_APPEND("\nAt other sensitivities:\n");
     for (int k = 0; k < NIGHT_ALT_COUNT; k++) {
       char at[8];
       fmt_hhmm(t->alt_fired_min[k], at, sizeof(at));
-      off += snprintf(s_night_buf + off, sizeof(s_night_buf) - off,
-          "  P%-2u  %s%s\n", t->alt_percentile[k], at,
+      NIGHT_APPEND("  P%-2u  %s%s\n", t->alt_percentile[k], at,
           t->alt_percentile[k] == t->percentile ? "  <- in use" : "");
     }
   }
   if (n > 1) {
-    off += snprintf(s_night_buf + off, sizeof(s_night_buf) - off, "\nEarlier:\n");
+    NIGHT_APPEND("\nEarlier:\n");
     for (int i = 1; i < n; i++) {
       char at[8];
       fmt_hhmm(ns[i].fired_min, at, sizeof(at));
-      off += snprintf(s_night_buf + off, sizeof(s_night_buf) - off,
-          "  %s  %s\n", at,
+      NIGHT_APPEND("  %s  %s\n", at,
           ns[i].smart_unavailable ? "unavailable"
-        : ns[i].fired_min == NIGHT_NO_FIRE ? "deadline" : "smart");
+        : ns[i].fired_by_deadline ? "deadline" : "smart");
     }
   }
 }
@@ -1248,6 +1266,11 @@ static void record_night(const SleepEvalResult *r, const HistoryRead *hr,
   time_t now = time(NULL);
   ns.day_local = (uint32_t)((now + prv_tz_offset(now)) / 86400);
   ns.smart_unavailable = (hr == NULL || !hr->available) ? 1 : 0;
+  ns.fired_by_deadline = fired_by_deadline ? 1 : 0;
+  // The real instant the ring started, regardless of how it got there -- the
+  // deadline-versus-early distinction is carried separately in
+  // fired_by_deadline above, so this is never NIGHT_NO_FIRE.
+  ns.fired_min = prv_minute_of_day(now);
 
   uint8_t pct = 90, mins = 2;
   as_effective_sens(&s_cfg, &pct, &mins);
@@ -1258,7 +1281,6 @@ static void record_night(const SleepEvalResult *r, const HistoryRead *hr,
     ns.baseline = r ? r->baseline : 0;
     ns.trigger_level = r ? r->trigger_level : 0;
     ns.acc_at_fire = r ? r->acc : 0;
-    ns.fired_min = fired_by_deadline ? NIGHT_NO_FIRE : prv_minute_of_day(now);
 
     // What the other sensitivities would have done to this same night.
     static const uint8_t k_alt[NIGHT_ALT_COUNT] = NIGHT_ALT_PCTS;
@@ -1274,14 +1296,13 @@ static void record_night(const SleepEvalResult *r, const HistoryRead *hr,
     }
   } else {
     ns.onset_min = NIGHT_NO_FIRE;
-    ns.fired_min = NIGHT_NO_FIRE;
     for (int k = 0; k < NIGHT_ALT_COUNT; k++) {
       ns.alt_fired_min[k] = NIGHT_NO_FIRE;
     }
   }
   as_push_night(&ns);
-  APP_LOG(APP_LOG_LEVEL_INFO, "NIGHT recorded base=%u level=%u fired=%d",
-          ns.baseline, ns.trigger_level, ns.fired_min);
+  APP_LOG(APP_LOG_LEVEL_INFO, "NIGHT recorded base=%u level=%u fired=%d deadline=%d",
+          ns.baseline, ns.trigger_level, ns.fired_min, (int)ns.fired_by_deadline);
 }
 
 // Converts UTC to the local day number without depending on timegm.

@@ -15,7 +15,11 @@
 // rather than misread.
 #define CONFIG_VERSION    1
 #define RUNSTATE_VERSION  1
-#define NIGHTS_VERSION    1
+// Bumped 1 -> 2 (Task 12 review): NightSummary gained fired_by_deadline, shifting
+// the byte offsets of alt_percentile/alt_fired_min within the persisted blob. A
+// stale v1 blob is discarded by as_load_nights' version check rather than being
+// misread through the new layout.
+#define NIGHTS_VERSION    2
 
 #define SENS_LOW      0
 #define SENS_MEDIUM   1
@@ -74,10 +78,19 @@ typedef struct {
   uint16_t onset_min;                          // minute of day, NIGHT_NO_FIRE if unknown
   uint16_t baseline;
   uint16_t trigger_level;
-  uint16_t fired_min;                          // NIGHT_NO_FIRE == deadline fired
+  // The actual minute the ring started, ALWAYS -- never NIGHT_NO_FIRE. Whether
+  // that instant was the hard deadline or an early smart wake is a separate
+  // fact (fired_by_deadline, below): overloading one field to carry both a
+  // time and a yes/no meant the deadline-fired case rendered as a blank
+  // "Deadline at --:--" when the real instant was known all along.
+  uint16_t fired_min;
   uint32_t acc_at_fire;
   uint8_t  percentile;                         // the one actually in use
   uint8_t  smart_unavailable;                  // 0/1
+  uint8_t  fired_by_deadline;                  // 0/1: 1 == the hard deadline rang
+                                                // it (the smart window never
+                                                // found a moment), 0 == an early
+                                                // smart wake
   uint8_t  alt_percentile[NIGHT_ALT_COUNT];
   uint16_t alt_fired_min[NIGHT_ALT_COUNT];
 } NightSummary;
