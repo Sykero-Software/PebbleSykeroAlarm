@@ -4,6 +4,8 @@
 
 time_t sc_schedule(time_t when, WakeCookie cookie) {
   if (when <= time(NULL)) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "wakeup %d declined: requested time already past",
+            (int)cookie);
     return 0;
   }
   // +1, -1, +2, -2 minutes: PebbleOS rejects a wakeup within one minute of any
@@ -94,9 +96,24 @@ bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
   // slots or E_RANGE retries run out, the thing that still exists is the alarm.
   if (slot >= 0) {
     time_t ring = sc_ring_deadline(cfg, alarm_when);
-    if (ring > now) {
-      sc_schedule(ring, WC_DEADLINE);
+    if (ring <= now) {
+      // SEMANTICS_AWAKE_BY subtracts the full escalation development time from
+      // the alarm time, so an alarm closer than that (e.g. the built-in
+      // 2-minute Test alarm) computes a deadline already in the past -- and
+      // until this fix, that silently dropped the wakeup here (this branch
+      // did not log, and the ring was simply never scheduled: "awake by"
+      // + an imminent alarm = the alarm never rings). Falling back to the
+      // alarm time itself keeps the alarm's basic promise (it rings) even
+      // when the awake-by lead time does not fit before it. alarm_when is
+      // always > now here (ac_next_alarm only ever returns future
+      // occurrences), so this fallback is always schedulable.
+      APP_LOG(APP_LOG_LEVEL_INFO,
+              "ring deadline for slot %d already past (ring=%lu <= now=%lu) -- "
+              "falling back to ringing at the alarm time",
+              slot, (unsigned long)ring, (unsigned long)now);
+      ring = alarm_when;
     }
+    sc_schedule(ring, WC_DEADLINE);
   }
 
   // PRIORITY 2 — snooze expiry, if one is pending. Ahead of the window because a

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <pebble.h>
+#include <string.h>
 #include "alarm_calc.h"
 #include "alarm_store.h"
 #include "escalation.h"
@@ -76,6 +77,29 @@ static void reload_and_rearm(void) {
   as_save_runstate(&s_rs);
   sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL));
   refresh_list();
+}
+
+// --- Phone config (Clay): the AlarmSet inbox message. ---
+
+static void inbox_received(DictionaryIterator *iter, void *context) {
+  Tuple *t = dict_find(iter, MESSAGE_KEY_AlarmSet);
+  if (t) {
+    // A CString tuple is not guaranteed NUL-terminated at the buffer end; copy
+    // into a bounded buffer and terminate it ourselves.
+    char buf[160];
+    size_t n = t->length < sizeof(buf) ? t->length : sizeof(buf) - 1;
+    memcpy(buf, t->value->cstring, n);
+    buf[n] = '\0';
+    int parsed = ac_parse_set(buf, s_alarms, MAX_ALARMS);
+    s_count = parsed;
+    APP_LOG(APP_LOG_LEVEL_INFO, "CFG AlarmSet='%s' -> %d alarms", buf, parsed);
+    reload_and_rearm();
+  }
+}
+
+static void outbox_sent(DictionaryIterator *iter, void *context) {}
+static void outbox_failed(DictionaryIterator *iter, AppMessageResult r, void *context) {
+  APP_LOG(APP_LOG_LEVEL_ERROR, "outbox failed: %d", (int)r);
 }
 
 static uint16_t list_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
@@ -934,6 +958,18 @@ static void handle_wakeup_cookie(int32_t cookie) {
         // Nothing to ring, but the wakeup was still consumed -- without this,
         // a stale/out-of-range pending_slot would silently drop the wakeup
         // chain here (no ring, no re-arm), and no alarm would ever fire again.
+        //
+        // Also clear the stale pending_slot itself (found in Task 7's review):
+        // with pending_slot left at an out-of-range value (e.g. an alarm the
+        // phone just deleted), every LATER WC_DEADLINE takes the `slot < 0`
+        // branch above straight to `s_rs.pending_slot`, fails this same
+        // `slot < s_count` bound again, and lands right back here -- so no
+        // alarm ever rings again. Resetting it (and the ring bookkeeping that
+        // goes with a fresh cycle) here is what breaks that loop.
+        s_rs.pending_slot = -1;
+        s_rs.ring_started_at = 0;
+        s_rs.snooze_count = 0;
+        as_save_runstate(&s_rs);
         sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now);
       }
       break;
@@ -1006,6 +1042,11 @@ int main(void) {
   if (launched_by_wakeup) {
     handle_wakeup_cookie(launch_cookie);
   }
+
+  app_message_register_inbox_received(inbox_received);
+  app_message_register_outbox_sent(outbox_sent);
+  app_message_register_outbox_failed(outbox_failed);
+  app_message_open(512, 128);
 
   app_event_loop();
 
