@@ -28,6 +28,30 @@ static SleepEvalCfg cfg_for(uint8_t pct, uint8_t mins) {
   return c;
 }
 
+// Fill [0,n) with a realistic RIGHT-SKEWED night: 70% near-still, 25% "light"
+// movement, 5% a genuine position change -- drawn independently per minute,
+// so no engineered run ever forms. Real VMC is nothing like the symmetric
+// fill_rest() jitter above; this is what exposed the Tukey-fence version
+// (see the review this test responds to): a distribution-shape trim flags
+// the legitimate upper tail of a skew like this as noise, which fill_rest's
+// narrow symmetric jitter can never demonstrate.
+static void fill_skewed(int n) {
+  for (int i = 0; i < n; i++) {
+    uint32_t roll = nextr() % 100;
+    uint16_t vmc;
+    if (roll < 70) {
+      vmc = (uint16_t)(nextr() % 15);            // still: 0-14
+    } else if (roll < 95) {
+      vmc = (uint16_t)(20 + nextr() % 121);      // light: 20-140
+    } else {
+      vmc = (uint16_t)(200 + nextr() % 901);     // position change: 200-1100
+    }
+    g_s[i].vmc = vmc;
+    g_s[i].orientation = 0x33;
+    g_s[i].is_invalid = false;
+  }
+}
+
 int main(void) {
   const int N = 480;              // 8 h of sleep
   const int WIN = N - 30;         // last 30 min is the alarm window
@@ -210,6 +234,13 @@ int main(void) {
     assert(!r.fire && r.insufficient_data);
     r = se_evaluate(g_s, 10, 50, false, &c);      // window_start past the end
     assert(!r.fire);
+    // Deliberately pinned: "the window hasn't started" and "not enough sleep
+    // data" both report insufficient_data=true. This module does not
+    // distinguish them (see the comment at the window_start>=count return in
+    // se_evaluate) -- the real caller only evaluates once the window has
+    // actually begun, so this collapsed case only matters for a malformed
+    // call like this one.
+    assert(r.insufficient_data);
     r = se_evaluate(g_s, 10, -5, false, &c);      // negative window_start
     assert(!r.fire);
   }
@@ -251,6 +282,73 @@ int main(void) {
     // quiet from the very start -> 0
     fill_rest(400, 20, 5);
     assert(se_find_onset(g_s, 400, 200, 10) == 0);
+  }
+
+  // --- (a) a realistic right-skewed night: the four sensitivities must give
+  // STRICTLY DISTINCT trigger levels. fill_rest's symmetric jitter (used by
+  // the "percentile monotonicity" block above) cannot show this -- there the
+  // min_margin floor dominates every percentile equally, which is why that
+  // block only pins non-strict monotonicity. This is the test that would
+  // have caught a distribution-shape (Tukey-fence) trim collapsing every
+  // sensitivity onto the same floor: real VMC is strongly right-skewed, and
+  // such a trim flags the legitimate upper tail as noise. Nothing here forms
+  // a run long enough to be a wake episode, so nothing should be excluded.
+  {
+    g_seed = 20;
+    fill_skewed(N);
+    const uint8_t pcts[4] = { 75, 82, 90, 95 };
+    uint16_t levels[4];
+    for (int k = 0; k < 4; k++) {
+      SleepEvalCfg c = cfg_for(pcts[k], 2);
+      SleepEvalResult r = se_evaluate(g_s, N, WIN, false, &c);
+      levels[k] = r.trigger_level;
+      printf("  skewed P%-2u level=%u\n", pcts[k], levels[k]);
+    }
+    for (int k = 1; k < 4; k++) {
+      assert(levels[k] > levels[k - 1]);
+    }
+  }
+
+  // --- (b) a large sustained stir INSIDE the alarm window must not change
+  // trigger_level versus the same night without it. This is the only
+  // assertion that pins the history/window population split at all: without
+  // it, the window's own movement would enlarge its own threshold as the
+  // night's real usage re-evaluates minute by minute. ---
+  {
+    g_seed = 21;
+    fill_skewed(N);
+    SleepEvalCfg c = cfg_for(90, 2);
+    SleepEvalResult base = se_evaluate(g_s, N, WIN, false, &c);
+
+    g_seed = 21;
+    fill_skewed(N);
+    for (int i = WIN + 5; i < WIN + 25; i++) {
+      g_s[i].vmc = 5000;
+    }
+    SleepEvalResult with_stir = se_evaluate(g_s, N, WIN, false, &c);
+    printf("  window-excl base_level=%u with_stir_level=%u\n",
+           base.trigger_level, with_stir.trigger_level);
+    assert(base.trigger_level == with_stir.trigger_level);
+  }
+
+  // --- (c) a THIN pre-window history (only 40 usable minutes after settle)
+  // with a genuine stir must still fire: the fallback to the whole recorded
+  // stretch must kick in rather than reporting insufficient_data, which
+  // would otherwise silently disable the smart alarm on any night where the
+  // alarm window happens to start soon after the settle-in period. ---
+  {
+    g_seed = 22;
+    const int WS = 60;        // window starts 60 min in (only 40 usable after settle)
+    const int CNT = WS + 30;  // 30-minute window
+    fill_rest(CNT, 30, 10);
+    for (int i = WS + 6; i < WS + 12; i++) {
+      g_s[i].vmc = 900;
+    }
+    SleepEvalCfg c = cfg_for(90, 2);
+    SleepEvalResult r = se_evaluate(g_s, CNT, WS, false, &c);
+    printf("  short-hist insufficient=%d fire=%d\n", (int)r.insufficient_data, (int)r.fire);
+    assert(!r.insufficient_data);
+    assert(r.fire);
   }
 
   printf("test_sleep_eval: all assertions passed\n");

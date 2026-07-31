@@ -7,6 +7,9 @@
 #define SE_MAX_SAMPLES 720
 // Below this many usable minutes there is no distribution worth taking a
 // percentile of, so the smart alarm stands down and the deadline handles it.
+// Applies to the pre-window history first; if that alone is too thin, the
+// whole recorded stretch (history + window) is retried before giving up --
+// a short pre-window gap is not the same thing as "not enough sleep data".
 #define SE_MIN_USABLE  60
 
 // One minute of the firmware's own movement history, reduced to what the
@@ -32,7 +35,10 @@ typedef struct {
 typedef struct {
   bool     fire;
   int      fired_index;       // index into samples, -1 when not firing
-  uint16_t baseline;          // median vmc of the sleeping minutes
+  uint16_t baseline;          // median vmc of the ranking population: the
+                              // history strictly before the alarm window
+                              // (or the whole recorded stretch, if that
+                              // history alone was too thin -- see SE_MIN_USABLE)
   uint16_t trigger_level;
   uint32_t acc;               // accumulator value at the fire point (or final)
   bool     insufficient_data;
@@ -50,7 +56,7 @@ void se_default_cfg(SleepEvalCfg *out, uint8_t percentile, uint8_t required_minu
 //
 // The accumulator is leaky by construction: subtracting the trigger level every
 // minute is what drains it at rest, so no separate decay constant is needed. A
-// single spike, however large, cannot fire -- the duration test requires
+// single spike, however large, cannot fire — the duration test requires
 // required_minutes consecutive contributing minutes.
 SleepEvalResult se_evaluate(const SleepMinute *samples, int count, int window_start,
                             bool is_restful, const SleepEvalCfg *cfg);

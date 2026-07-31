@@ -2,6 +2,22 @@
 #include "sleep_eval.h"
 #include <stddef.h>
 
+// A contiguous run of at least this many minutes above the wake threshold is
+// treated as a wake episode (arousal), not ordinary sleep movement, and is
+// excluded from the ranking population wholesale. Chosen well above the
+// window's own required_minutes range (1..5) so a legitimate short stir is
+// never misclassified just because a shorter, window-style duration test
+// would also have fired on it -- and well below any real awakening, which
+// lasts several times that.
+#define SE_WAKE_RUN_MINUTES 10
+// A minute is "elevated" (a candidate wake-episode minute) once its vmc
+// exceeds this multiple of the resting median plus the configured margin.
+// 4x is well above ordinary resting jitter (the still-sleeper tests show
+// that sitting within a small band of the median) but well below a genuine
+// position change, which real VMC data puts in the hundreds against a
+// resting median in the tens.
+#define SE_WAKE_THRESHOLD_MULT 4
+
 void se_default_cfg(SleepEvalCfg *out, uint8_t percentile, uint8_t required_minutes) {
   if (out == NULL) {
     return;
@@ -80,6 +96,21 @@ static uint8_t prv_orientation_mode(const SleepMinute *s, int from, int to) {
   return best;
 }
 
+// Fills s_sorted[0..n) with every valid vmc in samples[from,to), capped at
+// SE_MAX_SAMPLES, and returns n. Used both for the rough (pre-exclusion)
+// population and, after wake episodes are identified, to rebuild the ranking
+// population from scratch excluding them -- so this buffer legitimately gets
+// filled more than once per call.
+static int prv_fill(const SleepMinute *samples, int from, int to) {
+  int n = 0;
+  for (int i = from; i < to; i++) {
+    if (!samples[i].is_invalid && n < SE_MAX_SAMPLES) {
+      s_sorted[n++] = samples[i].vmc;
+    }
+  }
+  return n;
+}
+
 SleepEvalResult se_evaluate(const SleepMinute *samples, int count, int window_start,
                             bool is_restful, const SleepEvalCfg *cfg) {
   SleepEvalResult r = {0};
@@ -99,7 +130,15 @@ SleepEvalResult se_evaluate(const SleepMinute *samples, int count, int window_st
     window_start = 0;
   }
   if (window_start >= count) {
-    return r;   // the window has not started yet; nothing to judge
+    // The window has not started yet; nothing to judge. insufficient_data is
+    // left true here -- this module deliberately does not distinguish "the
+    // window hasn't started" from "not enough sleep data" in the result. The
+    // real caller (Task 11) only invokes se_evaluate once time has actually
+    // entered the alarm window, so this branch only matters for the
+    // degenerate/malformed-call case exercised by the host test, not real
+    // operation; a dedicated status for it would be a public-struct change
+    // this task does not need.
+    return r;
   }
 
   // Collect the sleeping minutes, excluding the settling-in period. Morpheuz's
@@ -111,19 +150,26 @@ SleepEvalResult se_evaluate(const SleepMinute *samples, int count, int window_st
 
   // The ranking population is the HISTORY strictly before the alarm window,
   // not "from..count" (which would include the window itself). Judging the
-  // window's own anomalousness against a population that already contains the
-  // window is circular, and folds whatever the window is doing into its own
-  // threshold. Falls back to from..count -- the same population the window
-  // would otherwise be measured against -- when there is no real history to
-  // draw from (window_start <= from: a degenerate/synthetic case, since a real
-  // alarm window is always well after the settle-in period).
+  // window's own anomalousness against a population that already contains
+  // the window is circular: real usage re-runs se_evaluate repeatedly while
+  // the window is in progress, so every minute of genuine stirring the
+  // window records would enlarge its own threshold as it goes. Falls back to
+  // from..count when the pre-window history alone is too thin (retried
+  // below), matching the population the window would otherwise be measured
+  // against.
   int pop_end = (window_start > from) ? window_start : count;
 
-  int n = 0;
-  for (int i = from; i < pop_end; i++) {
-    if (!samples[i].is_invalid && n < SE_MAX_SAMPLES) {
-      s_sorted[n++] = samples[i].vmc;
-    }
+  int n = prv_fill(samples, from, pop_end);
+  if (n < SE_MIN_USABLE && pop_end != count) {
+    // Not enough history before the window on its own -- retry against the
+    // whole recorded stretch (history + window) before giving up.
+    // insufficient_data must mean "not enough sleep data to build a
+    // distribution from", not "not enough history happened to precede this
+    // particular window start"; a short pre-window gap is not a data
+    // problem, and reporting it as one would be the same silent-never-fires
+    // failure relocated rather than fixed.
+    pop_end = count;
+    n = prv_fill(samples, from, pop_end);
   }
   if (n < SE_MIN_USABLE) {
     return r;
@@ -133,33 +179,66 @@ SleepEvalResult se_evaluate(const SleepMinute *samples, int count, int window_st
   prv_sort(s_sorted, n);
   r.baseline = s_sorted[n / 2];
 
-  // Trim upper outliers from the ranking population before taking the
-  // percentile, using Tukey's classic "far out" fence (k=3 x IQR above Q3).
-  // The median baseline above is already robust to a contaminating stretch of
-  // up to ~50% of the samples, but a raw percentile is not: any contiguous run
-  // of elevated minutes larger than (100-percentile)% of the population --
-  // e.g. an hour of restless tossing well after the settle-in window, still
-  // part of ordinary sleep -- pushes the trigger level up to that stretch's
-  // own magnitude, which silently disables the smart alarm for the rest of
-  // the night (the most dangerous failure mode: it never fires and nothing
-  // looks wrong). This only trims the pre-window HISTORY population above,
-  // never the window evaluation loop below, so it cannot mask genuine current
-  // activity -- only a past restless stretch is a contamination risk here.
-  int q1 = s_sorted[n / 4];
-  int q3 = s_sorted[(3 * n) / 4];
-  int iqr = q3 - q1;
-  int32_t fence = (int32_t)q3 + 3 * iqr;
-  int n_trim = n;
-  // n is already >= SE_MIN_USABLE here, so this floor never trims away more
-  // than half the population, mirroring the median's own tolerance.
-  int floor_n = n / 2;
-  if (floor_n < SE_MIN_USABLE) {
-    floor_n = SE_MIN_USABLE;
-  }
-  while (n_trim > floor_n && (int32_t)s_sorted[n_trim - 1] > fence) {
-    n_trim--;
+  // Exclude WAKE EPISODES from the ranking population: contiguous runs of at
+  // least SE_WAKE_RUN_MINUTES consecutive minutes whose vmc exceeds
+  // SE_WAKE_THRESHOLD_MULT x baseline + min_margin. This is what actually
+  // fixes the "restless early stretch" contamination (an hour of real
+  // thrashing, well after the settle-in period, is not sleep and must not
+  // set the trigger level) -- and it does so by RUN LENGTH, not by
+  // distribution shape, so an ordinary right-skewed night (mostly still, a
+  // quarter light movement, a few genuine but brief position changes, none
+  // of it forming a sustained run) is left completely untouched: no run, no
+  // trim, the percentile keeps its natural shape and the sensitivity levels
+  // stay distinct. A distribution-shape trim (a statistical outlier fence)
+  // was tried and rejected: real VMC is strongly right-skewed, so it flagged
+  // the legitimate upper tail as noise and collapsed every sensitivity onto
+  // the same floor, making the sensitivity setting a no-op.
+  //
+  // An invalid minute breaks a run in progress (consistent with how the
+  // window evaluation loop below treats invalid minutes: they cannot
+  // silently bridge two otherwise-unrelated stretches of movement).
+  uint32_t wake_threshold = (uint32_t)r.baseline * SE_WAKE_THRESHOLD_MULT + cfg->min_margin;
+  int n_trim = 0;
+  int run_start = -1;
+  for (int i = from; i <= pop_end; i++) {
+    bool elevated = (i < pop_end) && !samples[i].is_invalid
+                    && samples[i].vmc > wake_threshold;
+    if (elevated) {
+      if (run_start < 0) {
+        run_start = i;
+      }
+      continue;
+    }
+    if (run_start >= 0) {
+      int run_len = i - run_start;
+      if (run_len < SE_WAKE_RUN_MINUTES) {
+        // Too short to be a wake episode -- these are ordinary population
+        // samples after all.
+        for (int j = run_start; j < i && n_trim < SE_MAX_SAMPLES; j++) {
+          if (!samples[j].is_invalid) {
+            s_sorted[n_trim++] = samples[j].vmc;
+          }
+        }
+      }
+      // else: a genuine wake episode -- excluded entirely.
+      run_start = -1;
+    }
+    if (i < pop_end && !samples[i].is_invalid && n_trim < SE_MAX_SAMPLES) {
+      s_sorted[n_trim++] = samples[i].vmc;
+    }
   }
 
+  // If excluding wake episodes left too little to rank confidently, fall
+  // back to the unfiltered population rather than ranking against a
+  // near-empty set. n is already known >= SE_MIN_USABLE, so this floor is
+  // reachable only when a wake episode consumed most of the history -- rare,
+  // but ranking against fewer than SE_MIN_USABLE samples would be no more
+  // trustworthy than the "not enough data" case already gated on above.
+  if (n_trim < SE_MIN_USABLE) {
+    n_trim = prv_fill(samples, from, pop_end);
+  }
+
+  prv_sort(s_sorted, n_trim);
   int pi = (int)(((uint32_t)n_trim * cfg->percentile) / 100u);
   if (pi >= n_trim) {
     pi = n_trim - 1;
