@@ -3,36 +3,91 @@
 Pebble watchapp — **Sykerö Alarm** ("Smart Alarm" on the watch launcher, "Sykerö
 Smart Alarm" in the appstore).
 
-An alarm clock watchapp with two features that set it apart from the built-in
-Pebble alarms: a **smart alarm** that wakes you at the best moment inside a
-configurable window before your set time (using the watch's activity/sleep
-tracking to pick a lighter-sleep moment), and a **gradual escalation** wake
-sequence (vibration first, tightening and strengthening over time, with sound
-joining later on watches that have a speaker) instead of one abrupt buzz.
+An alarm clock built around two things the built-in Pebble alarm doesn't do
+well:
 
-All configuration — alarm time, smart-alarm window and sensitivity, wake
-profile, escalation timing, snooze behaviour, stop gesture, idle exit — is done
-**phone-side via a Clay config page**, not on the watch.
+- **A smart alarm that actually works.** PebbleOS's built-in smart alarm
+  triggers on any detected movement at all, so it tends to fire on the very
+  first check and wakes you the full window early, every time. This one reads
+  the firmware's per-minute movement history, derives a wake threshold from
+  **the user's own night** (a percentile over the night's movement, excluding
+  wake episodes), and requires *sustained* above-normal movement over a
+  leaky integrator before firing — a real lighter-sleep signal, not a twitch.
+  There is always a hard deadline behind it, so a quiet night still rings on
+  time.
+- **A gradual, configurable wake escalation.** Vibration starts gentle with
+  deliberately long gaps — enough for someone whose wrist position muffles the
+  buzz to notice and shift — then tightens and strengthens over time; sound
+  joins later and ramps in volume on watches with a speaker. Three presets
+  (Gentle / Normal / Insistent) plus a Custom profile expose the individual
+  timing parameters.
 
-The smart alarm requires the watch's activity tracking to be enabled and is
-**not available on aplite** (no accelerometer-based sleep data on that
-platform generation). The escalation sequence's **sound stage needs emery or
-flint** (the colour/speaker-equipped boards) — earlier hardware gets
-vibration-only escalation.
+Other features:
 
-Developed as a submodule of the private `pebble-timetracking` superrepo, alongside
-the other Sykerö Pebble apps (TimeStyle, Track Work Time, MIDI Recorder,
-Countdown timer, Tuya Lights).
+- Up to **8 alarm slots**, each with weekday repeat or one-time firing,
+  enable/disable, skip-next and snooze.
+- A configurable **stop gesture** (long press, two-tap or three-tap) so a
+  sleepy hand can't dismiss the alarm by accident; `BACK` deliberately does
+  nothing while it's ringing.
+- A **"Last night" summary** on the watch: sleep onset, the movement
+  baseline, what triggered the alarm, and when it would have fired at each
+  other sensitivity — the built-in calibration tool for deciding whether to
+  move the percentile.
+- Idle auto-exit back to the watchface.
 
-## Status
+All configuration — alarm times, smart-alarm window and sensitivity, wake
+profile, escalation timing, snooze behaviour, stop gesture, idle exit — is
+done **phone-side via a Clay config page**; the watch shows state and offers
+quick actions, but there is no on-watch editing.
 
-Build scaffolding only — the app currently shows a placeholder "Smart Alarm"
-screen. Design docs (specs/plans) live in the superrepo under
-`docs/superpowers/`, not here — this repository is intended to become public.
+## Platform limits
+
+- **The smart alarm needs the watch's activity/sleep tracking switched on**,
+  and is **not available on aplite** (Pebble Classic / Pebble Steel have no
+  motion-sensing API to read sleep data from). On aplite the app is a plain
+  alarm clock with the same gradual escalation, just without the smart
+  timing.
+- **The escalation's sound stage needs a speaker** — Pebble Time 2 (emery) and
+  Pebble 2 Duo (flint). On other platforms the escalation is vibration and
+  backlight only; when there's no speaker (or it's muted), the vibration ramp
+  compresses so it still reaches full strength instead of silently stopping
+  halfway.
+- Target platforms: aplite, basalt, diorite, emery, flint.
+
+Developed as a submodule of the private `pebble-timetracking` superrepo,
+alongside the other Sykerö Pebble apps (TimeStyle, Track Work Time, MIDI
+Recorder, Countdown timer, Tuya Lights).
 
 ## Build
 
 ```bash
 pebble build
-pebble install --emulator basalt
+pebble install --emulator diorite   # or emery for the 200px colour boards
 ```
+
+(`basalt` crashes headless during clock-face rendering — an unrelated,
+board-specific pebble-fctx issue seen across this project's apps; use
+diorite/emery for emulator work.)
+
+## Test
+
+```bash
+npm test
+```
+
+Runs the JS test suite (`node --test tests/*.test.js`, covering the pack
+contract and Clay config) **and** every host-side C test suite
+(`tests/run_c_tests.sh`, plain-gcc host builds of `alarm_calc`, `escalation`,
+`sleep_eval` and the phone↔watch pack contract) — no Pebble SDK or emulator
+needed for either.
+
+## Design docs
+
+Specs and implementation plans live in the superrepo, under
+`docs/superpowers/{specs,plans}/`, not in this repository — this repo is
+public, and design docs are kept in the (permanently private) superrepo by
+convention across all of Sykerö's Pebble apps.
+
+## Licence
+
+GPL-3.0 (see `LICENSE`).
