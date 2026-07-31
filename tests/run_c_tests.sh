@@ -28,6 +28,7 @@ run_one() {
 
 run_one t_alarm_calc     tests/test_alarm_calc.c     src/c/alarm_calc.c
 run_one t_escalation     tests/test_escalation.c     src/c/escalation.c
+run_one t_sleep_eval     tests/test_sleep_eval.c     src/c/sleep_eval.c
 
 # t_pack_contract is different: it takes its packed strings as argv, generated
 # HERE by invoking the REAL compiled packer (src/pkjs/alarm_pack.js, generated
