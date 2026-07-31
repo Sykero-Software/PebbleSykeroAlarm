@@ -53,12 +53,52 @@ test('section sub-labels are type:text, never a second heading', () => {
   }
 });
 
-test('every numeric key in the config is in NUMERIC_KEYS', () => {
-  const numericTypes = new Set(['slider']);
+function isNumericOptionValue(v) {
+  return typeof v === 'string' && /^-?\d+$/.test(v);
+}
+
+test('every numeric-valued control (slider, or an all-numeric select) is in NUMERIC_KEYS', () => {
+  // A slider is unambiguously numeric. A select is numeric only if ALL its
+  // option values parse as an integer -- a select with even one non-numeric
+  // option (there are none today, but the rule must be honest) must NOT be
+  // forced into NUMERIC_KEYS, since buildDict would parseInt it to NaN and
+  // silently drop it. Covering 'select' here (not just 'slider') closes the
+  // hole a plain `numericTypes = new Set(['slider'])` check leaves: 8 of this
+  // page's 23 NUMERIC_KEYS (TimeSemantics, Sensitivity, SensMinutes,
+  // WakeProfile, SnoozeMin, SnoozeMax, StopGesture, IdleExitSec) are
+  // select-typed, not sliders, and a select silently missing from
+  // NUMERIC_KEYS is exactly the "silently dead control" bug class this
+  // project has hit before (a sibling watchface shipped it).
   for (const i of keyed) {
-    if (numericTypes.has(i.type)) {
+    if (i.type === 'slider') {
       assert.ok(NUMERIC_KEYS.includes(i.messageKey),
         i.messageKey + ' is a slider but is not in NUMERIC_KEYS');
+    } else if (i.type === 'select') {
+      const opts = i.options || [];
+      const allNumeric = opts.length > 0 && opts.every((o) => isNumericOptionValue(o.value));
+      if (allNumeric) {
+        assert.ok(NUMERIC_KEYS.includes(i.messageKey),
+          i.messageKey + ' is an all-numeric select but is not in NUMERIC_KEYS');
+      } else {
+        assert.ok(!NUMERIC_KEYS.includes(i.messageKey),
+          i.messageKey + ' has a non-numeric option value but IS in NUMERIC_KEYS -- '
+          + 'buildDict would parseInt it to NaN and silently drop it');
+      }
+    }
+  }
+});
+
+test('every toggle that is a real settable key (not an alarm-slot toggle folded into AlarmSet) is in BOOL_KEYS', () => {
+  // Slot<N>On toggles are deliberately excluded: they are not sent as their
+  // own message key at all (there is no MESSAGE_KEY_Slot1On etc. -- see
+  // package.json), they are packed into the AlarmSet string by
+  // slotsFromSettings/packAlarmSet instead. Every OTHER toggle on this page
+  // (SmartEnabled, LightPulse, DstCheck) is a real message key and must
+  // convert through BOOL_KEYS or the watch never hears it.
+  for (const i of keyed) {
+    if (i.type === 'toggle' && !/^Slot\d+On$/.test(i.messageKey)) {
+      assert.ok(BOOL_KEYS.includes(i.messageKey),
+        i.messageKey + ' is a toggle but is not in BOOL_KEYS');
     }
   }
 });

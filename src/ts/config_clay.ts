@@ -117,7 +117,9 @@ export function buildConfig(): any[] {
     { type: 'slider', messageKey: 'EscMinGapS', label: 'Custom: final gap (s)',
       defaultValue: 5, min: 1, max: 60, step: 1, id: 'esc-min' },
     { type: 'slider', messageKey: 'EscTightenS', label: 'Custom: tighten over (s)',
-      defaultValue: 360, min: 30, max: 1800, step: 10, id: 'esc-tighten' },
+      defaultValue: 360, min: 30, max: 1800, step: 10, id: 'esc-tighten',
+      description: 'Also bounded by "give up after" below -- reduced to fit if '
+                 + 'that is short.' },
     { type: 'slider', messageKey: 'EscVibStartMs', label: 'Custom: first pulse (ms)',
       defaultValue: 80, min: 40, max: 2000, step: 10, id: 'esc-vibstart' },
     { type: 'slider', messageKey: 'EscVibMaxMs', label: 'Custom: longest pulse (ms)',
@@ -127,9 +129,13 @@ export function buildConfig(): any[] {
     { type: 'slider', messageKey: 'EscPulsesMax', label: 'Custom: final burst pulses',
       defaultValue: 3, min: 1, max: 8, step: 1, id: 'esc-pmax' },
     { type: 'slider', messageKey: 'EscSoundAfterS', label: 'Custom: sound joins after (s)',
-      defaultValue: 300, min: 1, max: 1800, step: 10, id: 'esc-sndafter' },
+      defaultValue: 300, min: 1, max: 1800, step: 10, id: 'esc-sndafter',
+      description: 'Also bounded by "give up after" below -- reduced to fit if '
+                 + 'that is short.' },
     { type: 'slider', messageKey: 'EscSoundRampS', label: 'Custom: volume ramp (s)',
-      defaultValue: 300, min: 10, max: 1800, step: 10, id: 'esc-sndramp' },
+      defaultValue: 300, min: 10, max: 1800, step: 10, id: 'esc-sndramp',
+      description: 'Also bounded by "give up after" below -- reduced to fit if '
+                 + 'that is short.' },
     { type: 'slider', messageKey: 'EscVolStart', label: 'Custom: first volume',
       defaultValue: 15, min: 1, max: 100, step: 1, id: 'esc-volstart' },
     { type: 'slider', messageKey: 'EscVolMax', label: 'Custom: max volume',
