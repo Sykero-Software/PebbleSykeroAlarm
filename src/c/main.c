@@ -32,15 +32,22 @@ static void close_to_watchface(void) {
 
 // --- Idle auto-exit: matches the other four Sykerö watchapps. Armed only on
 // the main menu and the alarm list (their .appear/.disappear below); never
-// while ringing, never while a smart window is being monitored, and never
-// while the phone's config page is open.
+// while a ring-family window is on screen, and never while the phone's config
+// page is open. "Ring-family window on screen" is checked directly against the
+// window stack (see idle_reset), NOT inferred from s_ringing/window_started_at
+// alone -- burst_cb's over_cap branch clears s_ringing while deliberately
+// leaving the ring window up (the intentionally non-dismissible "Alarm missed"
+// screen), so a flag-only guard has a gap there.
 //
-// s_ringing's one real (still-tentative-at-file-scope) definition is further
-// down in the ring section -- this is the same forward-reference pattern the
-// file already uses for s_last_eval/s_last_read (see the comment there): only
-// one of the two tentative definitions may carry an initializer, and neither
-// does, so this is legal C and not a redefinition.
-static bool s_ringing;
+// s_ringing/s_ring_window/s_wait_window's one real (still-tentative-at-file-
+// scope) definitions are further down in the ring/smart-window sections -- this
+// is the same forward-reference pattern the file already uses for
+// s_last_eval/s_last_read (see the comment there): only one of the two
+// tentative definitions may carry an initializer, and neither does, so this is
+// legal C and not a redefinition.
+static bool    s_ringing;
+static Window *s_ring_window;
+static Window *s_wait_window;
 
 static AppTimer *s_idle_timer;
 static bool      s_cfg_open;    // the phone's config page is open
@@ -60,11 +67,22 @@ static void idle_cancel(void) {
 
 static void idle_reset(void) {
   idle_cancel();
-  // Never while ringing, never while a smart window is being monitored, and never
-  // while the phone's config page is open -- the last one would make the config
-  // page close itself under the user.
-  if (s_cfg.idle_exit_sec == 0 || s_ringing || s_cfg_open
-      || s_rs.window_started_at != 0) {
+  // s_ringing/window_started_at are a cheap fast path (true for most callers,
+  // since idle_reset is only ever called from the two safe windows or from an
+  // inbox message) but are NOT sufficient on their own: over_cap clears
+  // s_ringing while leaving the ring window up, and window_started_at is
+  // already 0 throughout any ring (start_ring zeroes it on entry). The
+  // window_stack_contains_window checks are what make "never while a ring or
+  // smart-wait screen is showing" true in EVERY on-screen state, including the
+  // post-over_cap "Alarm missed" screen and any future one -- reachable here via
+  // the CfgOpen-close and IdleExitSec-changed paths in inbox_received, which run
+  // regardless of what is on top of the window stack. And never while the
+  // phone's config page is open -- that would make the config page close
+  // itself under the user.
+  if (s_cfg.idle_exit_sec == 0 || s_cfg_open
+      || s_ringing || s_rs.window_started_at != 0
+      || (s_ring_window && window_stack_contains_window(s_ring_window))
+      || (s_wait_window && window_stack_contains_window(s_wait_window))) {
     return;
   }
   s_idle_timer = app_timer_register((uint32_t)s_cfg.idle_exit_sec * 1000,
@@ -465,6 +483,12 @@ static void open_last_night(void) {
     s_night_window = window_create();
     window_set_window_handlers(s_night_window, (WindowHandlers){
       .load = night_window_load, .unload = night_window_unload,
+      // Scope addition beyond the brief (authorised by the controller, Task 13
+      // review): this is a read-only screen exactly like the alarm list, so a
+      // user who opens it and walks away must be returned to the watchface too
+      // -- the brief only named the two windows it happened to introduce, not
+      // every safe one that should get this.
+      .appear = idle_win_appear, .disappear = idle_win_disappear,
     });
   }
   window_stack_push(s_night_window, true);
