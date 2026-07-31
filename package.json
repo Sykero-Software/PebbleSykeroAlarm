@@ -2,7 +2,9 @@
   "name": "sykero-smart-alarm",
   "author": "Sykerö Software",
   "version": "1.0.0",
-  "keywords": ["pebble-app"],
+  "keywords": [
+    "pebble-app"
+  ],
   "private": true,
   "dependencies": {
     "pebble-clay": "^1.0.4"
@@ -12,25 +14,55 @@
     "uuid": "cba6bb36-e731-46b3-b5c7-915a997b8c61",
     "sdkVersion": "3",
     "enableMultiJS": true,
-    "targetPlatforms": ["aplite", "basalt", "diorite", "emery", "flint"],
+    "targetPlatforms": [
+      "basalt",
+      "diorite",
+      "emery",
+      "flint"
+    ],
     "capabilities": [],
-    "watchapp": { "watchface": false },
+    "watchapp": {
+      "watchface": false
+    },
     "messageKeys": [
       "AlarmSet",
-      "SmartEnabled", "SmartWindowMin", "TimeSemantics",
-      "Sensitivity", "SensPercentile", "SensMinutes",
+      "SmartEnabled",
+      "SmartWindowMin",
+      "TimeSemantics",
+      "Sensitivity",
+      "SensPercentile",
+      "SensMinutes",
       "WakeProfile",
-      "EscLeadGapS", "EscMinGapS", "EscTightenS",
-      "EscVibStartMs", "EscVibMaxMs", "EscPulsesStart", "EscPulsesMax",
-      "EscSoundAfterS", "EscSoundRampS", "EscVolStart", "EscVolMax", "EscCapS",
-      "SnoozeMin", "SnoozeMax", "SnoozeRampOffsetS",
-      "StopGesture", "LightPulse", "DstCheck",
-      "IdleExitSec", "CfgOpen",
+      "EscLeadGapS",
+      "EscMinGapS",
+      "EscTightenS",
+      "EscVibStartMs",
+      "EscVibMaxMs",
+      "EscPulsesStart",
+      "EscPulsesMax",
+      "EscSoundAfterS",
+      "EscSoundRampS",
+      "EscVolStart",
+      "EscVolMax",
+      "EscCapS",
+      "SnoozeMin",
+      "SnoozeMax",
+      "SnoozeRampOffsetS",
+      "StopGesture",
+      "LightPulse",
+      "DstCheck",
+      "IdleExitSec",
+      "CfgOpen",
       "CfgRequest"
     ],
     "resources": {
       "media": [
-        { "type": "bitmap", "menuIcon": true, "name": "MENU_ICON", "file": "images/menuicon.png" }
+        {
+          "type": "bitmap",
+          "menuIcon": true,
+          "name": "MENU_ICON",
+          "file": "images/menuicon.png"
+        }
       ]
     }
   },

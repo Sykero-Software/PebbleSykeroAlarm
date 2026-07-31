@@ -1,1 +1,1 @@
-pebble.countdown@sykero.fi
+pebble.smartalarm@sykero.fi

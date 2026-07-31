@@ -25,6 +25,27 @@ test('every settable key appears exactly once', () => {
   }
 });
 
+test('every checkboxgroup option is a plain STRING', () => {
+  // Clay's checkboxgroup template renders each option with {{{this}}} and its
+  // README specifies "options | array of strings". A {label, value} object
+  // therefore renders as the literal text "[object Object]" next to every
+  // checkbox — which is exactly what a real phone showed for the weekday
+  // Repeat field on 2026-07-31. The config page cannot render headless, so this
+  // assertion is the only thing standing between that bug and a user.
+  let seen = 0;
+  for (const i of items) {
+    if (i.type === 'checkboxgroup') {
+      for (const o of i.options || []) {
+        assert.strictEqual(typeof o, 'string',
+          i.messageKey + ' checkboxgroup option must be a plain string, got ' +
+          typeof o + ' (' + JSON.stringify(o) + ')');
+        seen++;
+      }
+    }
+  }
+  assert.ok(seen > 0, 'expected at least one checkboxgroup option to check');
+});
+
 test('every radiogroup and select option value is a STRING', () => {
   // A non-string value makes Clay's radiogroup manipulator call value.replace(),
   // which throws and silently aborts rendering at that item — the page then has

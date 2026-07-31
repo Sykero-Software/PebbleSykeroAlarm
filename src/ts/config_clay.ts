@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { SLOT_COUNT } from './alarm_pack';
 
-const DAY_OPTIONS = [
-  { label: 'Mon', value: 'mon' }, { label: 'Tue', value: 'tue' },
-  { label: 'Wed', value: 'wed' }, { label: 'Thu', value: 'thu' },
-  { label: 'Fri', value: 'fri' }, { label: 'Sat', value: 'sat' },
-  { label: 'Sun', value: 'sun' },
-];
+// PLAIN STRINGS, not {label, value} objects. Clay's checkboxgroup template renders
+// each option with `{{{this}}}` (node_modules/pebble-clay/src/templates/components/
+// checkboxgroup.tpl) and its README says "options | array of strings", so an object
+// renders as the literal text "[object Object]" on the phone. The value half was dead
+// anyway: a checkboxgroup returns a boolean[] read POSITIONALLY, so the labels are the
+// only thing Clay needs. Reported from a real phone 2026-07-31 — the config page cannot
+// render headless, so tests/config_clay.test.js now asserts this instead.
+const DAY_OPTIONS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function alarmSlotItems(i: number): any[] {
   const n = i + 1;

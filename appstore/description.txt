@@ -6,4 +6,4 @@ A gradual wake instead of one abrupt buzz: vibration starts gentle with long gap
 
 Up to 8 alarms, each with its own repeat days, snooze and skip-next. Everything is configured from your phone; the watch shows status and quick actions.
 
-Two honest limits: the smart alarm needs activity tracking turned on and isn't available on the original Pebble / Pebble Steel (no motion-sensing API on that generation) — there it's a reliable alarm clock with the same gradual wake, just without the smart timing. And the sound stage needs a speaker (Pebble Time 2 or Pebble 2 Duo) — other watches get vibration-and-backlight escalation only.
+Two honest limits: the smart alarm needs activity tracking turned on, and the original Pebble / Pebble Steel are not supported at all — that generation has no motion-sensing API, so there is nothing for the smart alarm to read. And the sound stage needs a speaker (Pebble Time 2 or Pebble 2 Duo); other watches get vibration-and-backlight escalation only.
