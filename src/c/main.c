@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include <pebble.h>
+#include "alarm_store.h"
 
 static Window *s_main_window;
 static TextLayer *s_hello;

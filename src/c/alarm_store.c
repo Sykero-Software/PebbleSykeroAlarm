@@ -1,0 +1,163 @@
+// SPDX-License-Identifier: GPL-3.0-only
+#include "alarm_store.h"
+#include <pebble.h>
+#include <string.h>
+
+void as_load_alarms(Alarm *out, int *count) {
+  memset(out, 0, sizeof(Alarm) * MAX_ALARMS);
+  *count = 0;
+  if (!persist_exists(PK_ALARMS)) {
+    return;
+  }
+  int want = (int)(sizeof(Alarm) * MAX_ALARMS);
+  int got = persist_read_data(PK_ALARMS, out, want);
+  if (got <= 0 || (got % (int)sizeof(Alarm)) != 0) {
+    memset(out, 0, sizeof(Alarm) * MAX_ALARMS);
+    return;
+  }
+  *count = got / (int)sizeof(Alarm);
+}
+
+void as_save_alarms(const Alarm *alarms, int count) {
+  if (count < 0) count = 0;
+  if (count > MAX_ALARMS) count = MAX_ALARMS;
+  persist_write_data(PK_ALARMS, alarms, sizeof(Alarm) * (size_t)count);
+}
+
+void as_load_config(Config *out) {
+  memset(out, 0, sizeof(*out));
+  bool ok = false;
+  if (persist_exists(PK_CONFIG)
+      && persist_read_data(PK_CONFIG, out, sizeof(*out)) == (int)sizeof(*out)
+      && out->version == CONFIG_VERSION) {
+    ok = true;
+  }
+  if (!ok) {
+    // Defaults. These must agree with the Clay page's defaultValues; the C side
+    // is what a fresh install uses before the phone has ever sent anything, and
+    // what the emulator shows (the config page cannot open headless).
+    memset(out, 0, sizeof(*out));
+    out->version = CONFIG_VERSION;
+    out->smart_enabled = true;
+    out->smart_window_min = 30;
+    out->time_semantics = SEMANTICS_RING_STARTS;
+    out->sensitivity = SENS_MEDIUM;
+    out->sens_percentile = 90;
+    out->sens_minutes = 2;
+    out->wake_profile = ESC_PROFILE_NORMAL;
+    esc_profile(ESC_PROFILE_NORMAL, &out->esc);
+    out->snooze_min = 10;
+    out->snooze_max = 5;
+    out->snooze_ramp_offset_s = 120;
+    out->stop_gesture = STOP_TWO_TAP;
+    out->light_pulse = true;
+    out->dst_check = true;
+    out->idle_exit_sec = 15;
+  }
+  esc_clamp(&out->esc);
+}
+
+void as_save_config(const Config *cfg) {
+  Config c = *cfg;
+  c.version = CONFIG_VERSION;
+  esc_clamp(&c.esc);
+  persist_write_data(PK_CONFIG, &c, sizeof(c));
+}
+
+void as_load_runstate(RunState *out) {
+  memset(out, 0, sizeof(*out));
+  if (persist_exists(PK_RUNSTATE)
+      && persist_read_data(PK_RUNSTATE, out, sizeof(*out)) == (int)sizeof(*out)
+      && out->version == RUNSTATE_VERSION) {
+    return;
+  }
+  memset(out, 0, sizeof(*out));
+  out->version = RUNSTATE_VERSION;
+  out->pending_slot = -1;
+}
+
+void as_save_runstate(const RunState *rs) {
+  RunState r = *rs;
+  r.version = RUNSTATE_VERSION;
+  persist_write_data(PK_RUNSTATE, &r, sizeof(r));
+}
+
+// The night ring buffer is stored newest-first so as_load_nights is a plain copy
+// and pushing is a memmove. NIGHT_HISTORY * sizeof(NightSummary) must stay under
+// the 256-byte per-key persist cap; a static assert enforces that at compile time.
+typedef struct {
+  uint8_t version;
+  uint8_t count;
+  NightSummary nights[NIGHT_HISTORY];
+} NightBlob;
+
+_Static_assert(sizeof(NightBlob) <= 256,
+               "night history exceeds the 256-byte persist limit for one key");
+
+static void prv_load_night_blob(NightBlob *b) {
+  memset(b, 0, sizeof(*b));
+  if (persist_exists(PK_NIGHTS)
+      && persist_read_data(PK_NIGHTS, b, sizeof(*b)) == (int)sizeof(*b)
+      && b->version == NIGHTS_VERSION) {
+    if (b->count > NIGHT_HISTORY) {
+      b->count = NIGHT_HISTORY;
+    }
+    return;
+  }
+  memset(b, 0, sizeof(*b));
+  b->version = NIGHTS_VERSION;
+}
+
+void as_push_night(const NightSummary *n) {
+  NightBlob b;
+  prv_load_night_blob(&b);
+  int keep = b.count < NIGHT_HISTORY ? b.count : NIGHT_HISTORY - 1;
+  if (keep > 0) {
+    memmove(&b.nights[1], &b.nights[0], sizeof(NightSummary) * (size_t)keep);
+  }
+  b.nights[0] = *n;
+  if (b.count < NIGHT_HISTORY) {
+    b.count++;
+  }
+  b.version = NIGHTS_VERSION;
+  persist_write_data(PK_NIGHTS, &b, sizeof(b));
+}
+
+int as_load_nights(NightSummary *out, int max) {
+  NightBlob b;
+  prv_load_night_blob(&b);
+  int n = b.count < max ? b.count : max;
+  for (int i = 0; i < n; i++) {
+    out[i] = b.nights[i];
+  }
+  return n;
+}
+
+void as_effective_esc(const Config *cfg, EscParams *out) {
+  if (cfg->wake_profile == ESC_PROFILE_CUSTOM) {
+    *out = cfg->esc;
+  } else {
+    esc_profile(cfg->wake_profile, out);
+  }
+  esc_clamp(out);
+}
+
+void as_effective_sens(const Config *cfg, uint8_t *percentile, uint8_t *minutes) {
+  uint8_t p, m = 2;
+  switch (cfg->sensitivity) {
+    case SENS_LOW:    p = 95; break;
+    case SENS_HIGH:   p = 82; break;
+    case SENS_CUSTOM:
+      p = cfg->sens_percentile;
+      m = cfg->sens_minutes;
+      if (p < 70) p = 70;
+      if (p > 99) p = 99;
+      if (m < 1) m = 1;
+      if (m > 5) m = 5;
+      break;
+    case SENS_MEDIUM:
+    default:          p = 90; break;
+  }
+  if (percentile) *percentile = p;
+  if (minutes) *minutes = m;
+}
