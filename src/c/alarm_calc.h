@@ -53,4 +53,30 @@ int ac_next_alarm(const Alarm *alarms, int count, time_t now, time_t *out_when);
 // Core Devices firmware and hard-fault on hardware.
 int ac_parse_set(const char *s, Alarm *out, int max);
 
+// Apply `incoming` ONLY if it differs, byte for byte, from `last_applied` (the
+// AlarmSet string that produced the alarms currently in out[]). Returns true when
+// out[]/count were replaced, false when the resend was a no-op.
+//
+// This is the invariant it exists to hold: A CONFIG RESEND THAT CHANGES NOTHING
+// MUST NOT CHANGE ANYTHING. `enabled` and `skip_next` are watch-mutable BY DESIGN
+// -- SELECT toggles an alarm on/off, long SELECT skips its next occurrence, and
+// ring_stop_now disables a fired one-time alarm -- and none of that is ever sent
+// back to the phone. But ac_parse_set rebuilds every slot from `{0}` with
+// `enabled` taken from the phone's saved '-' bit and `skip_next` forced to false,
+// so re-parsing an unchanged string silently reverts all three. That was harmless
+// while the phone's dict only arrived on an explicit Save; it is not harmless now
+// that the watch asks for its config on EVERY launch, because dst_check (on by
+// default) launches the app around 03:00 every night: disable tomorrow's alarm
+// from the wrist at 22:00, and the 03:00 launch would re-enable it and ring at
+// 07:00 anyway.
+//
+// A GENUINE phone-side change still takes precedence in full, including a
+// phone-side disable -- that is why this compares the string rather than merging
+// per-slot: merging by minute_of_day+weekday_mask would make a phone-side disable
+// undeliverable, since it is indistinguishable from a watch-side one.
+//
+// `last_applied` may be NULL or "" (nothing recorded yet), which always applies.
+bool ac_apply_set_if_changed(const char *incoming, const char *last_applied,
+                             Alarm *out, int *count, int max);
+
 #endif

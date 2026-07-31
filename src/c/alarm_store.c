@@ -27,6 +27,8 @@ _Static_assert(sizeof(Config) <= 256,
                "Config exceeds the 256-byte persist limit for one key");
 _Static_assert(sizeof(RunState) <= 256,
                "RunState exceeds the 256-byte persist limit for one key");
+_Static_assert(ALARMSET_STR_MAX <= 256,
+               "the AlarmSet string exceeds the 256-byte persist limit for one key");
 
 void as_load_alarms(Alarm *out, int *count) {
   memset(out, 0, sizeof(Alarm) * MAX_ALARMS);
@@ -61,6 +63,36 @@ void as_save_alarms(const Alarm *alarms, int count) {
   if (count < 0) count = 0;
   if (count > MAX_ALARMS) count = MAX_ALARMS;
   prv_write(PK_ALARMS, alarms, sizeof(Alarm) * (size_t)count);
+}
+
+void as_load_alarmset_str(char *out, int max) {
+  if (out == NULL || max <= 0) {
+    return;
+  }
+  out[0] = '\0';
+  if (!persist_exists(PK_ALARMSET)) {
+    return;   // "" -- nothing recorded yet, so the next AlarmSet always applies
+  }
+  if (persist_read_string(PK_ALARMSET, out, (size_t)max) <= 0) {
+    out[0] = '\0';
+  }
+}
+
+void as_save_alarmset_str(const char *s) {
+  if (s == NULL) {
+    return;
+  }
+  // persist_write_string, not prv_write: it stores the NUL terminator and bounds
+  // the read side for us, and the value is a plain C string rather than a struct.
+  int w = persist_write_string(PK_ALARMSET, s);
+  if (w < 0) {
+    // Failing here does not lose an alarm -- the alarms themselves are saved
+    // separately -- but it does mean the NEXT unchanged resend will be treated as
+    // a change and revert the watch's own on/off + skip toggles, so it must be
+    // visible rather than silent.
+    APP_LOG(APP_LOG_LEVEL_ERROR, "persist write key=%u (AlarmSet string) failed (%d)",
+            (unsigned)PK_ALARMSET, w);
+  }
 }
 
 void as_load_config(Config *out) {

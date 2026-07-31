@@ -132,3 +132,31 @@ int ac_parse_set(const char *s, Alarm *out, int max) {
   }
   return n;
 }
+
+// Hand-rolled, not strcmp: the safe-to-call libc surface on the Core Devices
+// firmware is narrow (memcpy/memset/strlen/snprintf are fine, the str*to*
+// converters hard-fault), and a four-line comparison needs no such judgement
+// call. Both strings are NUL-terminated by their callers.
+static bool prv_str_eq(const char *a, const char *b) {
+  if (a == NULL || b == NULL) {
+    return false;
+  }
+  while (*a != '\0' && *a == *b) {
+    a++;
+    b++;
+  }
+  return *a == *b;
+}
+
+bool ac_apply_set_if_changed(const char *incoming, const char *last_applied,
+                             Alarm *out, int *count, int max) {
+  if (incoming == NULL || out == NULL || count == NULL) {
+    return false;
+  }
+  if (last_applied != NULL && last_applied[0] != '\0'
+      && prv_str_eq(incoming, last_applied)) {
+    return false;   // a true no-op: out[] and *count are left exactly as they were
+  }
+  *count = ac_parse_set(incoming, out, max);
+  return true;
+}

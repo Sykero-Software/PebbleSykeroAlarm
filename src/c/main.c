@@ -10,6 +10,10 @@
 
 static Alarm    s_alarms[MAX_ALARMS];
 static int      s_count;
+// The AlarmSet string that produced s_alarms, persisted across launches. An
+// inbound AlarmSet identical to this one is a no-op, which is what keeps the
+// every-launch config resend from reverting the watch's own on/off + skip toggles.
+static char     s_alarmset_str[ALARMSET_STR_MAX];
 static Config   s_cfg;
 static RunState s_rs;
 
@@ -254,14 +258,29 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   if (t) {
     // A CString tuple is not guaranteed NUL-terminated at the buffer end; copy
     // into a bounded buffer and terminate it ourselves.
-    char buf[160];
+    static char buf[ALARMSET_STR_MAX];   // static: 160 B off a ~2 KB app stack
     size_t n = t->length < sizeof(buf) ? t->length : sizeof(buf) - 1;
     memcpy(buf, t->value->cstring, n);
     buf[n] = '\0';
-    int parsed = ac_parse_set(buf, s_alarms, MAX_ALARMS);
-    s_count = parsed;
-    APP_LOG(APP_LOG_LEVEL_INFO, "CFG AlarmSet='%s' -> %d alarms", buf, parsed);
-    reload_and_rearm();
+    // Only act when the string actually differs from the one that produced the
+    // alarms we already hold. The phone now resends its saved config on EVERY
+    // launch (the config handshake), and dst_check launches the app around 03:00
+    // every night, so an unconditional re-parse would revert the watch's own
+    // SELECT on/off toggle, long-SELECT skip, and ring_stop_now's auto-disable of
+    // a fired one-time alarm -- every night, silently, making the watch ring
+    // after the user had turned the alarm off. See ac_apply_set_if_changed.
+    if (!ac_apply_set_if_changed(buf, s_alarmset_str, s_alarms, &s_count, MAX_ALARMS)) {
+      APP_LOG(APP_LOG_LEVEL_INFO,
+              "CFG AlarmSet unchanged ('%s') -- no-op, keeping the watch's own "
+              "on/off and skip flags", buf);
+    } else {
+      APP_LOG(APP_LOG_LEVEL_INFO, "CFG AlarmSet='%s' -> %d alarms", buf, s_count);
+      // Record what was applied, so the next resend of the same string is a no-op.
+      // snprintf, not strcpy: bounded, and both buffers are ALARMSET_STR_MAX.
+      snprintf(s_alarmset_str, sizeof(s_alarmset_str), "%s", buf);
+      as_save_alarmset_str(s_alarmset_str);
+      reload_and_rearm();
+    }
   }
 
   bool changed = false;
@@ -1752,6 +1771,12 @@ int main(void) {
   as_load_config(&s_cfg);
   as_load_runstate(&s_rs);
   as_load_alarms(s_alarms, &s_count);
+  // Must be loaded before app_message_open/request_config below, since the phone's
+  // reply can arrive as soon as the outbox flushes and this is what makes an
+  // unchanged reply a no-op. Left "" on a fresh install (and on an install that
+  // predates this key), so the phone's first AlarmSet always applies and can
+  // replace the seeded demo set.
+  as_load_alarmset_str(s_alarmset_str, sizeof(s_alarmset_str));
 
   // First-run seed only: a reasonable demo alarm set for a fresh install with
   // nothing stored yet. The phone overwrites this on its first config save.
@@ -1838,6 +1863,17 @@ int main(void) {
   APP_LOG(amr == APP_MSG_OK ? APP_LOG_LEVEL_INFO : APP_LOG_LEVEL_ERROR,
           "app_message_open(in=%u out=%u) = %d (heap was %u)",
           (unsigned)in_size, (unsigned)out_size, (int)amr, (unsigned)heap);
+  if (amr != APP_MSG_OK) {
+    // heap_bytes_free() is a byte COUNT, not a promise that those bytes are
+    // contiguous, so the large request above can still fail on fragmentation --
+    // in a place where the old fixed 512/128 would have succeeded. Falling back to
+    // exactly what this app shipped with means the sizing change can never be the
+    // reason messaging is unavailable. Both outcomes are logged, because a silent
+    // failure here means no config and no alarm times at all.
+    amr = app_message_open(512, 128);
+    APP_LOG(amr == APP_MSG_OK ? APP_LOG_LEVEL_WARNING : APP_LOG_LEVEL_ERROR,
+            "app_message_open fallback(in=512 out=128) = %d", (int)amr);
+  }
   // After open (the outbox does not exist before it) and after the handlers are
   // registered above.
   request_config();

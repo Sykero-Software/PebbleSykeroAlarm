@@ -10,6 +10,16 @@
 #define PK_CONFIG    2
 #define PK_RUNSTATE  3
 #define PK_NIGHTS    4
+// The AlarmSet string that produced the alarms currently in store. Compared
+// against every inbound AlarmSet so an unchanged resend is a true no-op and does
+// not revert the watch's own enabled/skip_next toggles -- see
+// ac_apply_set_if_changed for the full reasoning.
+#define PK_ALARMSET  5
+
+// Worst case is 8 slots of "[-]HH:MM|DDDDDDD" joined by ';' = 8*14 + 7 + NUL =
+// 120 bytes; 160 leaves room and matches the inbound copy buffer. Must stay
+// inside PebbleOS's 256-byte per-key persist cap (asserted in alarm_store.c).
+#define ALARMSET_STR_MAX 160
 
 // Struct versions, bumped when a layout changes so a stale blob is discarded
 // rather than misread.
@@ -97,6 +107,12 @@ typedef struct {
 
 void as_load_alarms(Alarm *out, int *count);
 void as_save_alarms(const Alarm *alarms, int count);
+
+// The last AlarmSet string actually applied. as_load_alarmset_str writes "" when
+// nothing has been recorded yet (a fresh install, or an install that predates this
+// key), which ac_apply_set_if_changed treats as "always apply".
+void as_load_alarmset_str(char *out, int max);
+void as_save_alarmset_str(const char *s);
 
 // Loads the persisted config, or fills *out with the documented defaults when
 // nothing is stored or the stored version does not match.

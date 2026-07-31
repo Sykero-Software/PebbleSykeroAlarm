@@ -127,6 +127,74 @@ int main(void) {
   assert(ac_parse_set("25:00|1111111", parsed, MAX_ALARMS) == 0);
   assert(ac_parse_set("07:75|1111111", parsed, MAX_ALARMS) == 0);
 
+  // --- A CONFIG RESEND THAT CHANGES NOTHING MUST NOT CHANGE ANYTHING.
+  //
+  // The whole-branch re-review's Critical. `enabled` and `skip_next` are
+  // watch-mutable by design (SELECT toggles an alarm on/off, long SELECT skips its
+  // next occurrence, ring_stop_now disables a fired one-time alarm) and are never
+  // sent back to the phone, but ac_parse_set rebuilds every slot from `{0}` --
+  // `enabled` from the phone's '-' bit, `skip_next` always false. That was
+  // harmless while the phone's dict only arrived on an explicit Save; once the
+  // watch asks for its config on every launch it is not, because dst_check (on by
+  // default) launches the app around 03:00 EVERY NIGHT: disable tomorrow's alarm
+  // from the wrist at 22:00, and an unconditional re-parse re-enables it and the
+  // alarm rings at 07:00 anyway.
+  {
+    Alarm a[MAX_ALARMS];
+    int   cnt = 0;
+    const char *set = "07:00|1111100;08:30|0000011";
+
+    // nothing recorded yet ("" and NULL both mean "always apply")
+    assert(ac_apply_set_if_changed(set, "", a, &cnt, MAX_ALARMS));
+    assert(cnt == 2 && a[0].enabled && a[1].enabled);
+    assert(ac_apply_set_if_changed(set, NULL, a, &cnt, MAX_ALARMS));
+    assert(cnt == 2);
+
+    // the user now acts ON THE WATCH: slot 0 switched off, slot 1's next
+    // occurrence skipped
+    a[0].enabled = false;
+    a[1].skip_next = true;
+
+    // ... and the phone resends the very same string (every launch, ~03:00 nightly)
+    assert(!ac_apply_set_if_changed(set, set, a, &cnt, MAX_ALARMS));
+    assert(cnt == 2);
+    assert(a[0].enabled == false);      // still off -- the alarm must NOT ring
+    assert(a[1].skip_next == true);     // still skipped
+    assert(a[0].minute_of_day == 7 * 60);
+    assert(a[1].minute_of_day == 8 * 60 + 30);
+    // byte-identical, not merely equivalent: a separately-built copy of the same
+    // string is still a no-op (the comparison is by value, not by pointer)
+    char same[64];
+    snprintf(same, sizeof(same), "%s", set);
+    assert(!ac_apply_set_if_changed(same, set, a, &cnt, MAX_ALARMS));
+    assert(a[0].enabled == false && a[1].skip_next == true);
+
+    // A GENUINE phone-side change still takes full precedence -- including a
+    // phone-side DISABLE, which is exactly why this compares the string instead of
+    // merging per slot (a merge could never tell a phone-side disable from the
+    // watch-side one above, so it would be undeliverable).
+    const char *set_disabled = "-07:00|1111100;08:30|0000011";
+    assert(ac_apply_set_if_changed(set_disabled, set, a, &cnt, MAX_ALARMS));
+    assert(cnt == 2);
+    assert(a[0].enabled == false);      // the phone's disable
+    assert(a[1].enabled == true);
+    assert(a[1].skip_next == false);    // reset by a real change, as designed
+
+    // ... and a phone-side ENABLE overrides a watch-side disable, same way
+    a[0].enabled = false;
+    assert(ac_apply_set_if_changed(set, set_disabled, a, &cnt, MAX_ALARMS));
+    assert(a[0].enabled == true);
+
+    // a changed slot COUNT is a change like any other
+    assert(ac_apply_set_if_changed("07:00|1111100", set, a, &cnt, MAX_ALARMS));
+    assert(cnt == 1);
+
+    // defensive: a NULL incoming string is never treated as a change
+    cnt = 1;
+    assert(!ac_apply_set_if_changed(NULL, set, a, &cnt, MAX_ALARMS));
+    assert(cnt == 1);
+  }
+
   printf("test_alarm_calc: all assertions passed\n");
   return 0;
 }
