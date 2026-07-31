@@ -4,7 +4,9 @@
 #include "alarm_calc.h"
 #include "alarm_store.h"
 #include "escalation.h"
+#include "health_read.h"
 #include "scheduler.h"
+#include "sleep_eval.h"
 
 static Alarm    s_alarms[MAX_ALARMS];
 static int      s_count;
@@ -721,6 +723,14 @@ static void ring_down_multi(ClickRecognizerRef rec, void *ctx) {
 
 static void hold_tick_cb(void *data) {
   s_hold_timer = NULL;
+  // Guarded for the same reason as update_ring_text (this task's review):
+  // stop_ring_output always cancels this timer before any path pops the ring
+  // window today, so it is not reachable stale in practice, but the ring
+  // window is no longer the only one this app can pop without exiting, so
+  // this stays consistent with that convention rather than relying on it.
+  if (!s_ringing || !s_ring_progress) {
+    return;
+  }
   s_hold_ms += 100;
   layer_mark_dirty(s_ring_progress);
   if (s_hold_ms >= STOP_HOLD_MS) {
@@ -833,7 +843,11 @@ static void ring_window_load(Window *w) {
   // clip edge of the shared band, previously flush with it on a 144x168 board).
   int mid_top = up_y + btn_h + 2;
   int mid_h   = down_y - mid_top - 2;
-  int time_h  = mid_h * 6 / 10;
+  // 55/100, not 6/10: at 6/10 sub_h works out to 23 px for a GOTHIC_24_BOLD line
+  // box, one row short, so "(muted)" (permanent on aplite/basalt/diorite -- no
+  // PBL_SPEAKER, so sound_available() is always false there) lost the bottom
+  // curl of its parentheses. Verified by re-shooting a zoomed diorite screenshot.
+  int time_h  = mid_h * 55 / 100;
 
   GSize time_sz;
   GFont time_font = ring_time_font(b.size.w, time_h, &time_sz);
@@ -847,7 +861,7 @@ static void ring_window_load(Window *w) {
     down_y = b.size.h * 78 / 100 - btn_h / 2;
     mid_top = up_y + btn_h + 2;
     mid_h   = down_y - mid_top - 2;
-    time_h  = mid_h * 6 / 10;
+    time_h  = mid_h * 55 / 100;
     time_font = ring_time_font(b.size.w, time_h, &time_sz);
   }
   int sub_h = mid_h - time_h;
@@ -972,6 +986,174 @@ static void start_ring(int slot, bool from_deadline) {
   burst_cb(NULL);   // first burst immediately
 }
 
+// --- The smart window: minute-history reads, the waiting screen, the 1-min poll. ---
+
+static Window    *s_wait_window;
+static TextLayer *s_wait_time;
+static TextLayer *s_wait_sub;
+static AppTimer  *s_poll_timer;
+static SleepMinute s_night[SE_MAX_SAMPLES];   // static: 720 * 4 B does not fit the stack
+
+static void wait_window_update(void) {
+  // Guarded for the same reason as update_ring_text: a timer callback (the
+  // minute tick, or the poll's own reschedule) must not outlive the window
+  // that owns these layers.
+  if (!s_wait_time || !s_wait_sub) {
+    return;
+  }
+  static char t[8];
+  static char sub[64];
+  clock_copy_time_string(t, sizeof(t));
+  text_layer_set_text(s_wait_time, t);
+
+  time_t deadline = (time_t)s_rs.deadline_at;
+  struct tm *dtm = localtime(&deadline);
+  if (s_rs.smart_unavailable) {
+    snprintf(sub, sizeof(sub), "Alarm %02d:%02d\nSmart alarm unavailable",
+             dtm->tm_hour, dtm->tm_min);
+  } else {
+    snprintf(sub, sizeof(sub), "Alarm %02d:%02d\nWaiting for light sleep",
+             dtm->tm_hour, dtm->tm_min);
+  }
+  text_layer_set_text(s_wait_sub, sub);
+}
+
+static void wait_window_load(Window *w) {
+  Layer *root = window_get_root_layer(w);
+  GRect b = layer_get_bounds(root);
+  s_wait_time = text_layer_create(GRect(0, b.size.h / 2 - 52, b.size.w, 44));
+  text_layer_set_font(s_wait_time, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
+  text_layer_set_text_alignment(s_wait_time, GTextAlignmentCenter);
+  layer_add_child(root, text_layer_get_layer(s_wait_time));
+
+  s_wait_sub = text_layer_create(GRect(4, b.size.h / 2, b.size.w - 8, 60));
+  text_layer_set_font(s_wait_sub, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  text_layer_set_text_alignment(s_wait_sub, GTextAlignmentCenter);
+  text_layer_set_overflow_mode(s_wait_sub, GTextOverflowModeWordWrap);
+  layer_add_child(root, text_layer_get_layer(s_wait_sub));
+
+  wait_window_update();
+}
+
+static void wait_window_unload(Window *w) {
+  text_layer_destroy(s_wait_sub);
+  text_layer_destroy(s_wait_time);
+  // NULL both out (carried fix from Task 11's review, mirroring
+  // ring_window_unload): this task is what makes it possible to pop the wait
+  // window without exiting the app (the out-of-range branch in
+  // handle_wakeup_cookie can now do so), so a timer racing an already-unloaded
+  // window must not dereference a stale pointer.
+  s_wait_sub = NULL;
+  s_wait_time = NULL;
+}
+
+static void wait_noop(ClickRecognizerRef rec, void *ctx) {}
+
+static void wait_click_config(void *ctx) {
+  // BACK must not dismiss the window: doing so would abandon the smart window and
+  // leave only the deadline. Same reasoning as on the ring screen.
+  window_single_click_subscribe(BUTTON_ID_BACK, wait_noop);
+}
+
+static void wait_minute_tick(struct tm *t, TimeUnits units) {
+  wait_window_update();
+}
+
+static void poll_cb(void *data);
+
+// The most recent evaluation and history read. Task 12's record_night describes
+// the night from these instead of re-reading history at ring time, so they are
+// updated on EVERY evaluation — including the unavailable path, where
+// s_last_read.available stays false and the summary reports "no data".
+static SleepEvalResult s_last_eval;
+static HistoryRead s_last_read;
+
+// Evaluate the window once. Returns true when the alarm should ring now.
+static bool smart_should_ring(SleepEvalResult *out) {
+  uint8_t pct = 90, mins = 2;
+  as_effective_sens(&s_cfg, &pct, &mins);
+  SleepEvalCfg sc;
+  se_default_cfg(&sc, pct, mins);
+
+  HistoryRead hr = hr_read_night(s_night, SE_MAX_SAMPLES,
+                                 (time_t)s_rs.window_started_at);
+  s_last_read = hr;
+  if (!hr.available || hr.window_start < 0) {
+    s_rs.smart_unavailable = true;
+    as_save_runstate(&s_rs);
+    APP_LOG(APP_LOG_LEVEL_WARNING, "SMART unavailable (count=%d)", hr.count);
+    return false;
+  }
+  s_rs.smart_unavailable = false;
+
+  SleepEvalResult r = se_evaluate(s_night, hr.count, hr.window_start,
+                                  hr.is_restful, &sc);
+  APP_LOG(APP_LOG_LEVEL_INFO,
+          "SMART n=%d win=%d base=%u level=%u acc=%lu restful=%d fire=%d",
+          hr.count, hr.window_start, r.baseline, r.trigger_level,
+          (unsigned long)r.acc, (int)hr.is_restful, (int)r.fire);
+  s_last_eval = r;
+  if (out) {
+    *out = r;
+  }
+  return r.fire;
+}
+
+static void poll_cb(void *data) {
+  s_poll_timer = NULL;
+  if (s_rs.window_started_at == 0 || s_ringing) {
+    return;
+  }
+  time_t now = time(NULL);
+  if (s_rs.deadline_at != 0 && now >= (time_t)s_rs.deadline_at) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "SMART deadline reached");
+    start_ring(s_rs.pending_slot, true);
+    return;
+  }
+  SleepEvalResult r;
+  if (smart_should_ring(&r)) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "SMART firing early at acc=%lu", (unsigned long)r.acc);
+    start_ring(s_rs.pending_slot, false);
+    return;
+  }
+  wait_window_update();
+  s_poll_timer = app_timer_register(60 * 1000, poll_cb, NULL);
+}
+
+static void open_smart_window(int slot, time_t window_start, time_t deadline) {
+  s_rs.pending_slot = (int8_t)slot;
+  s_rs.window_started_at = (uint32_t)window_start;
+  s_rs.deadline_at = (uint32_t)deadline;
+  s_rs.ring_started_at = 0;
+  s_rs.snooze_count = 0;
+  as_save_runstate(&s_rs);
+
+  APP_LOG(APP_LOG_LEVEL_INFO, "SMART window open slot=%d until %lu",
+          slot, (unsigned long)deadline);
+
+  if (!s_wait_window) {
+    s_wait_window = window_create();
+    window_set_window_handlers(s_wait_window, (WindowHandlers){
+      .load = wait_window_load, .unload = wait_window_unload,
+    });
+    window_set_click_config_provider(s_wait_window, wait_click_config);
+  }
+  if (!window_stack_contains_window(s_wait_window)) {
+    window_stack_push(s_wait_window, true);
+  }
+  tick_timer_service_subscribe(MINUTE_UNIT, wait_minute_tick);
+
+  // Keep the rolling re-entry wakeup alive: if anything kills this app during the
+  // window, the next re-entry relaunches it and monitoring resumes intact, because
+  // the baseline comes from minute history rather than from our RAM.
+  sc_arm_reentry(time(NULL));
+
+  if (s_poll_timer) {
+    app_timer_cancel(s_poll_timer);
+  }
+  poll_cb(NULL);   // evaluate immediately
+}
+
 static void handle_wakeup_cookie(int32_t cookie) {
   time_t now = time(NULL);
   switch (cookie) {
@@ -1018,17 +1200,73 @@ static void handle_wakeup_cookie(int32_t cookie) {
         s_rs.pending_slot = -1;
         s_rs.ring_started_at = 0;
         s_rs.snooze_count = 0;
+        // Also clear window_started_at (found in Task 11's review): ring_stop_now
+        // already does, but this out-of-range branch didn't -- harmless until
+        // Task 11 started setting it, which makes a stale open-window flag
+        // reachable here (e.g. the phone deletes the pending alarm while its
+        // smart window is open). Left set, sc_rearm below would re-arm
+        // WC_REENTRY for a window that no longer has a slot to evaluate, and
+        // poll_cb would keep polling forever with nothing to ring.
+        s_rs.window_started_at = 0;
         as_save_runstate(&s_rs);
+        // If the waiting screen happens to be up for this now-invalid window,
+        // don't leave it stranded on screen: with window_started_at cleared,
+        // poll_cb's own next tick would just return early forever (its guard
+        // checks that field first) and the BACK button is deliberately a
+        // no-op there, so nothing would ever bring the user back to the
+        // watchface. s_ringing is guaranteed false here (checked at the top of
+        // this case), so this is safe.
+        if (s_poll_timer) {
+          app_timer_cancel(s_poll_timer);
+          s_poll_timer = NULL;
+        }
+        if (s_wait_window && window_stack_contains_window(s_wait_window)) {
+          close_to_watchface();
+        }
         sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now);
       }
       break;
     }
     case WC_WINDOW:
-    case WC_REENTRY:
-      // Task 11 opens/continues the smart window here. Until then, re-arm so the
-      // deadline stays scheduled.
-      sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now);
+    case WC_REENTRY: {
+      if (s_ringing) {
+        break;
+      }
+      time_t when = 0;
+      int slot = s_rs.pending_slot;
+      if (slot >= 0 && slot >= s_count) {
+        // A stale pending_slot: the phone deleted/reconfigured alarms while
+        // this window was open (the same class of bound check the
+        // WC_DEADLINE/WC_SNOOZE case above already applies to its own
+        // pending_slot read). Fall back to whatever is next now rather than
+        // reading a slot that no longer represents the tracked alarm.
+        slot = -1;
+      }
+      if (slot < 0) {
+        slot = ac_next_alarm(s_alarms, s_count, now - 60, &when);
+      } else {
+        when = ac_next_occurrence(&s_alarms[slot], now - 60);
+      }
+      if (slot < 0) {
+        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now);
+        break;
+      }
+      time_t ring = s_rs.deadline_at != 0 ? (time_t)s_rs.deadline_at
+                                          : sc_ring_deadline(&s_cfg, when);
+      if (now >= ring) {
+        start_ring(slot, true);
+        break;
+      }
+      bool smart_on = s_cfg.smart_enabled && PBL_IF_HEALTH_ELSE(true, false);
+      if (!smart_on) {
+        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now);
+        break;
+      }
+      time_t win = s_rs.window_started_at != 0 ? (time_t)s_rs.window_started_at
+                                               : sc_window_start(&s_cfg, when);
+      open_smart_window(slot, win, ring);
       break;
+    }
     case WC_DST:
       sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now);
       break;
