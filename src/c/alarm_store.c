@@ -18,10 +18,24 @@ void as_load_alarms(Alarm *out, int *count) {
   *count = got / (int)sizeof(Alarm);
 }
 
+// persist_write_data returns the number of bytes written, or a negative status.
+// A silent failure would mean the watch believes an alarm set or a pending snooze
+// was saved when it was not — discovered only after a kill or a reboot, i.e. at
+// the exact moment the alarm was supposed to fire. So every write is checked.
+// There is no useful recovery at this layer; logging is what makes the failure
+// visible in `pebble logs` instead of invisible.
+static void prv_write(uint32_t key, const void *data, size_t size) {
+  int w = persist_write_data(key, data, size);
+  if (w != (int)size) {
+    APP_LOG(APP_LOG_LEVEL_ERROR, "persist write key=%u failed (%d, wanted %d)",
+            (unsigned)key, w, (int)size);
+  }
+}
+
 void as_save_alarms(const Alarm *alarms, int count) {
   if (count < 0) count = 0;
   if (count > MAX_ALARMS) count = MAX_ALARMS;
-  persist_write_data(PK_ALARMS, alarms, sizeof(Alarm) * (size_t)count);
+  prv_write(PK_ALARMS, alarms, sizeof(Alarm) * (size_t)count);
 }
 
 void as_load_config(Config *out) {
@@ -61,7 +75,7 @@ void as_save_config(const Config *cfg) {
   Config c = *cfg;
   c.version = CONFIG_VERSION;
   esc_clamp(&c.esc);
-  persist_write_data(PK_CONFIG, &c, sizeof(c));
+  prv_write(PK_CONFIG, &c, sizeof(c));
 }
 
 void as_load_runstate(RunState *out) {
@@ -79,7 +93,7 @@ void as_load_runstate(RunState *out) {
 void as_save_runstate(const RunState *rs) {
   RunState r = *rs;
   r.version = RUNSTATE_VERSION;
-  persist_write_data(PK_RUNSTATE, &r, sizeof(r));
+  prv_write(PK_RUNSTATE, &r, sizeof(r));
 }
 
 // The night ring buffer is stored newest-first so as_load_nights is a plain copy
@@ -109,7 +123,12 @@ static void prv_load_night_blob(NightBlob *b) {
 }
 
 void as_push_night(const NightSummary *n) {
-  NightBlob b;
+  // static, not a local: NightBlob is 228 bytes against a ~2 KB app stack, and a
+  // caller's own frame plus the stack used inside persist_* / memmove / APP_LOG
+  // sits on top of it. An oversized local is how the sibling apps hit
+  // "App fault! PC:0 LR:0" on hardware while the emulator looked fine. The event
+  // loop is single-threaded, so a non-reentrant helper is safe here.
+  static NightBlob b;
   prv_load_night_blob(&b);
   int keep = b.count < NIGHT_HISTORY ? b.count : NIGHT_HISTORY - 1;
   if (keep > 0) {
@@ -120,11 +139,11 @@ void as_push_night(const NightSummary *n) {
     b.count++;
   }
   b.version = NIGHTS_VERSION;
-  persist_write_data(PK_NIGHTS, &b, sizeof(b));
+  prv_write(PK_NIGHTS, &b, sizeof(b));
 }
 
 int as_load_nights(NightSummary *out, int max) {
-  NightBlob b;
+  static NightBlob b;   // 228 bytes — see the note in as_push_night
   prv_load_night_blob(&b);
   int n = b.count < max ? b.count : max;
   for (int i = 0; i < n; i++) {
