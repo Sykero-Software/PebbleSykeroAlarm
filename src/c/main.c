@@ -355,12 +355,16 @@ static uint32_t ring_elapsed_s(void) {
   // Unlimited snoozing (snooze_max == 0) must never go silent: past a certain
   // count, base alone already exceeds cap_s and esc_step would report
   // over_cap on the very first burst of the resumed ring even though the user
-  // is actively pressing Snooze, not ignoring the alarm. Clamp to full
+  // is actively pressing Snooze, not ignoring the alarm. Saturate against full
   // development instead -- an exhausted ramp stays at maximum escalation,
-  // never mute. (esc_clamp guarantees full development happens strictly
-  // before cap_s, so this is always < cap_s.)
-  if (base >= e.cap_s) {
-    base = esc_full_development_s(&e);
+  // never mute. Saturating (not just checking base >= cap_s) also closes a
+  // band just below cap_s (e.g. snooze_count=7, base=840 with the default
+  // 120s offset and cap_s=900): base alone doesn't reach cap_s yet, but by the
+  // time base+d does, the ring would cap out after playing only ~60s at
+  // maximum -- capping while the user is actively snoozing, not ignoring it.
+  uint16_t full = esc_full_development_s(&e);
+  if (base > full) {
+    base = full;
   }
 
   long d = (long)(now - (time_t)s_rs.ring_started_at);
@@ -371,19 +375,33 @@ static uint32_t ring_elapsed_s(void) {
   if (d < 0) {
     d = 0;
   }
-  // Defensive: a ring_started_at stale by more than a full cap_s -- state this
-  // function did not anticipate, from some path other than the ones already
-  // fixed above -- must never make an alarm open already past its cap and play
-  // nothing. Treat it as starting now instead. start_ring's from_deadline
-  // reset is the primary defence; this is belt and braces for anything that
-  // isn't.
+  // Defensive bound for a ring_started_at left stale by some path this
+  // function did not anticipate. Clamp to cap_s -- do NOT reset to 0. A ring
+  // that is legitimately past its cap looks EXACTLY like a "stale" one (both
+  // have d > cap_s), so zeroing here would defeat the cap outright: the ramp
+  // would restart from its gentlest step and keep restarting forever, the
+  // alarm would vibrate/flash until the battery dies, over_cap would never
+  // fire, missed[] would never be set, and reload_and_rearm() would never run
+  // to re-arm the next alarm. Clamping to cap_s instead means esc_step still
+  // sees elapsed_s >= cap_s and reports over_cap, exactly as it should for
+  // "this ring is long over". start_ring's from_deadline reset is what
+  // actually prevents a stale value in the first place; this is only the
+  // belt-and-braces fallback, and it must fail toward the cap, not away from it.
   if (d > (long)e.cap_s) {
-    d = 0;
+    d = (long)e.cap_s;
   }
   return base + (uint32_t)d;
 }
 
 static void update_ring_text(void) {
+  // Guarded: unreachable today (every path that pops the ring window goes
+  // through stop_ring_output first, which stops the burst/tick timers that
+  // are this function's only callers), but Task 11's smart window pops
+  // windows on its own paths -- once that lands, a timer callback racing a
+  // window that has already unloaded (and NULLed these) must not crash.
+  if (!s_ring_time || !s_ring_sub) {
+    return;
+  }
   static char t[8];
   static char sub[48];
   clock_copy_time_string(t, sizeof(t));
@@ -404,6 +422,7 @@ static void update_ring_text(void) {
 }
 
 static void burst_cb(void *data);
+static void ring_minute_tick(struct tm *t, TimeUnits units);
 
 static void schedule_next_burst(uint16_t gap_s) {
   if (s_burst_timer) {
@@ -558,6 +577,18 @@ static void ring_snooze_now(void) {
     s_rs.snooze_count = prev_snooze_count;
     as_save_runstate(&s_rs);
     sc_schedule(time(NULL) + SC_REENTRY_GAP_S, WC_SNOOZE);
+    // stop_ring_output() (called above) unsubscribed the minute tick and left
+    // whichever of sub/hint was showing untouched -- undo both, since the
+    // ring is staying up: re-subscribe so the clock keeps refreshing every
+    // minute between bursts, and force back to the subtitle so a hint from
+    // right before this press doesn't linger on screen for the rest of the ring.
+    tick_timer_service_subscribe(MINUTE_UNIT, ring_minute_tick);
+    if (s_ring_hint) {
+      layer_set_hidden(text_layer_get_layer(s_ring_hint), true);
+    }
+    if (s_ring_sub) {
+      layer_set_hidden(text_layer_get_layer(s_ring_sub), false);
+    }
     s_ringing = true;
     burst_cb(NULL);
     return;
@@ -568,12 +599,21 @@ static void ring_snooze_now(void) {
 
 static void hint_hide_cb(void *data) {
   s_hint_timer = NULL;
+  // Guarded for the same reason as update_ring_text: a timer callback must
+  // not outlive the window that owns the layers it touches.
+  if (!s_ring_hint || !s_ring_sub) {
+    return;
+  }
   layer_set_hidden(text_layer_get_layer(s_ring_hint), true);
   // The hint shares the subtitle's slot (see ring_window_load) -- restore it.
   layer_set_hidden(text_layer_get_layer(s_ring_sub), false);
 }
 
 static void show_press_again_hint(void) {
+  // Guarded for the same reason as update_ring_text.
+  if (!s_ring_hint || !s_ring_sub) {
+    return;
+  }
   uint8_t need = (s_cfg.stop_gesture == STOP_THREE_TAP) ? 3 : 2;
   static char hint[24];
   // Plain ASCII "x", not the U+00D7 multiplication sign: GOTHIC_18_BOLD has no
@@ -666,51 +706,102 @@ static void progress_update(Layer *layer, GContext *gctx) {
   graphics_fill_rect(gctx, GRect(0, 0, w, b.size.h), 0, GCornerNone);
 }
 
+// Pick the largest of these three whose measured line-box height fits
+// time_h, falling back to the smallest if even that overflows. Mirrors
+// PebbleCountdownTimer's alarm_title_font() (src/c/main.c:285-303): board
+// screen height varies too much (144..228 px) to hardcode one font size and
+// assume it fits -- a fixed BITHAM_42_BOLD clipped its own descenders on
+// every 144x168 board (confirmed by pixel-zooming a screenshot: "14:20"
+// rendered with the tops of the digits sheared off).
+static GFont ring_time_font(int box_w, int time_h, GSize *out) {
+  static const char *const keys[] = {
+    FONT_KEY_BITHAM_42_BOLD,
+    FONT_KEY_BITHAM_30_BLACK,
+    FONT_KEY_GOTHIC_28_BOLD,
+  };
+  const GRect probe = GRect(0, 0, box_w, 200);
+  GFont chosen = NULL;
+  for (unsigned i = 0; i < ARRAY_LENGTH(keys); i++) {
+    GFont f = fonts_get_system_font(keys[i]);
+    // "00:00" (not the real time) so the measurement is stable regardless of
+    // which digits happen to be showing -- every system digit glyph in these
+    // fonts is the same advance/height, so any two-digit HH:MM is equivalent.
+    GSize sz = graphics_text_layout_get_content_size(
+        "00:00", f, probe, GTextOverflowModeFill, GTextAlignmentCenter);
+    chosen = f; *out = sz;
+    if (sz.h <= time_h) { break; }   // largest font that fits vertically -> use it
+  }
+  return chosen;
+}
+
 static void ring_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
   window_set_background_color(w, GColorWhite);
 
   // Follows PebbleCountdownTimer's alarm screen (src/c/main.c:344-399): the two
-  // button labels in GOTHIC_28_BOLD, right-aligned and positioned vertically AT
-  // their physical buttons (UP ~22% of height, DOWN ~78%) -- readable at arm's
-  // length by someone who just woke up, instead of GOTHIC_18 tucked into a
-  // corner. Keeping the labels to one short word each ("Snooze"/"Stop") is what
-  // lets 28 bold fit at 144 px; which GESTURE stops the alarm is taught by the
-  // hint on the first press, not by the button label.
-  const int up_y   = b.size.h * 22 / 100 - 16;
-  const int down_y = b.size.h * 78 / 100 - 18;
+  // button labels right-aligned and positioned vertically AT their physical
+  // buttons (UP ~22% of height, DOWN ~78%) -- readable at arm's length by
+  // someone who just woke up, instead of GOTHIC_18 tucked into a corner. The
+  // clock is the biggest, most important element on screen, so its font is
+  // chosen from the space actually available (ring_time_font) rather than
+  // fixed -- and on a 144x168 board even that isn't enough room at the normal
+  // 28-bold label height, so the labels shrink to GOTHIC_24_BOLD in that case
+  // to buy the clock the room instead. Which GESTURE stops the alarm is
+  // taught by the hint on the first press (or the progress bar for
+  // long-press), not by the button label -- so "Stop" alone is always enough
+  // there regardless of which size is picked.
+  int btn_h = 34;
+  GFont btn_font = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
+  int up_y   = b.size.h * 22 / 100 - btn_h / 2;
+  int down_y = b.size.h * 78 / 100 - btn_h / 2;
+  // 2 px gap under UP, 2 px reserved above DOWN (the latter is also what
+  // keeps the subtitle's descenders -- e.g. "Alarm (muted)" -- off the exact
+  // clip edge of the shared band, previously flush with it on a 144x168 board).
+  int mid_top = up_y + btn_h + 2;
+  int mid_h   = down_y - mid_top - 2;
+  int time_h  = mid_h * 6 / 10;
 
-  s_ring_up = text_layer_create(GRect(0, up_y, b.size.w - 6, 34));
-  text_layer_set_font(s_ring_up, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
+  GSize time_sz;
+  GFont time_font = ring_time_font(b.size.w, time_h, &time_sz);
+  if (time_sz.h > time_h) {
+    // Not even BITHAM_30_BLACK/GOTHIC_28_BOLD's measured line box fit at the
+    // normal label height -- shrink the labels to buy the clock more room and
+    // re-measure once against the new (larger) time_h.
+    btn_h = 28;
+    btn_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+    up_y   = b.size.h * 22 / 100 - btn_h / 2;
+    down_y = b.size.h * 78 / 100 - btn_h / 2;
+    mid_top = up_y + btn_h + 2;
+    mid_h   = down_y - mid_top - 2;
+    time_h  = mid_h * 6 / 10;
+    time_font = ring_time_font(b.size.w, time_h, &time_sz);
+  }
+  int sub_h = mid_h - time_h;
+
+  s_ring_up = text_layer_create(GRect(0, up_y, b.size.w - 6, btn_h));
+  text_layer_set_font(s_ring_up, btn_font);
   text_layer_set_text_alignment(s_ring_up, GTextAlignmentRight);
   text_layer_set_text(s_ring_up, "Snooze");
   text_layer_set_background_color(s_ring_up, GColorClear);
   layer_add_child(root, text_layer_get_layer(s_ring_up));
 
-  // "Stop" is now constant regardless of s_cfg.stop_gesture -- at 28 bold,
-  // "2x = Stop" would overflow 144 px, and which button stops the alarm is all
-  // this label needs to say; the hint (multi-tap) or the progress bar
-  // (long-press) teaches the gesture itself.
-  s_ring_down = text_layer_create(GRect(0, down_y, b.size.w - 6, 34));
-  text_layer_set_font(s_ring_down, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
+  // "Stop" is constant regardless of s_cfg.stop_gesture -- at either label
+  // size, "2x = Stop" would not fit as well as "Stop" alone, and which button
+  // stops the alarm is all this label needs to say; the hint (multi-tap) or
+  // the progress bar (long-press) teaches the gesture itself.
+  s_ring_down = text_layer_create(GRect(0, down_y, b.size.w - 6, btn_h));
+  text_layer_set_font(s_ring_down, btn_font);
   text_layer_set_text_alignment(s_ring_down, GTextAlignmentRight);
   text_layer_set_text(s_ring_down, "Stop");
   text_layer_set_background_color(s_ring_down, GColorClear);
   layer_add_child(root, text_layer_get_layer(s_ring_down));
 
-  // Time + subtitle share the band left between the two button labels. On a
-  // 144x168 board that band is only ~59 px once the labels claim their 34 px
-  // each at 22%/78% -- not enough for BITHAM_42_BOLD plus a full subtitle line
-  // with any margin, so the split is proportional (60/40) and verified by
-  // screenshot rather than assumed (see the task report for both boards).
-  const int mid_top = up_y + 34 + 2;    // just under the UP label, 2 px gap
-  const int mid_h   = down_y - mid_top; // whatever room is left above DOWN
-  const int time_h  = mid_h * 6 / 10;
-  const int sub_h   = mid_h - time_h;
-
+  // Time + subtitle share the band left between the two button labels, split
+  // proportionally (60/40) -- verified by screenshot on both boards rather
+  // than assumed (see the task report).
   s_ring_time = text_layer_create(GRect(0, mid_top, b.size.w, time_h));
-  text_layer_set_font(s_ring_time, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
+  text_layer_set_font(s_ring_time, time_font);
   text_layer_set_text_alignment(s_ring_time, GTextAlignmentCenter);
   text_layer_set_background_color(s_ring_time, GColorClear);
   layer_add_child(root, text_layer_get_layer(s_ring_time));
@@ -834,9 +925,16 @@ static void handle_wakeup_cookie(int32_t cookie) {
       // Bounded against s_count (not just >= 0): with s_count == 0 the
       // fallback above leaves slot at -1, and starting a ring on slot 0 with
       // no alarms configured would have ring_stop_now later mutate
-      // s_alarms[0] out of range.
+      // s_alarms[0] out of range. This can also happen with s_count > 0: if
+      // alarms were deleted (from the phone) while this wakeup was pending,
+      // s_rs.pending_slot can point past the shrunk array.
       if (slot >= 0 && slot < s_count) {
         start_ring(slot, cookie == WC_DEADLINE);
+      } else {
+        // Nothing to ring, but the wakeup was still consumed -- without this,
+        // a stale/out-of-range pending_slot would silently drop the wakeup
+        // chain here (no ring, no re-arm), and no alarm would ever fire again.
+        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now);
       }
       break;
     }
@@ -885,7 +983,14 @@ int main(void) {
     APP_LOG(APP_LOG_LEVEL_INFO, "LAUNCHED reason=%d", (int)launch_reason());
   }
 
-  sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL));
+  if (!sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL))) {
+    // A pending snooze exists (RunState says so) but its wakeup could not be
+    // placed. This can happen if the user opens the app manually while a
+    // snooze is in flight. There is no UI at this layer to surface it (Task
+    // 8/9's config page is where a notification would eventually live), so at
+    // minimum this must not be silently discarded -- log it visibly.
+    APP_LOG(APP_LOG_LEVEL_ERROR, "launch sc_rearm: pending snooze could not be armed");
+  }
 
   // The handler is only invoked for wakeups that fire while already running; a
   // wakeup that launches the app is instead handled by dispatching
