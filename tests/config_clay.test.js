@@ -32,6 +32,12 @@ test('every checkboxgroup option is a plain STRING', () => {
   // checkbox — which is exactly what a real phone showed for the weekday
   // Repeat field on 2026-07-31. The config page cannot render headless, so this
   // assertion is the only thing standing between that bug and a user.
+  //
+  // The page HAS no checkboxgroup any more: the weekday checkboxes moved inside
+  // the alarmList component, which renders its own <input type="checkbox"> and
+  // cannot hit Clay's template at all. The loop is kept so re-adding a
+  // checkboxgroup is still covered, and the count is asserted as zero rather than
+  // dropped, so this deliberate change reads as deliberate.
   let seen = 0;
   for (const i of items) {
     if (i.type === 'checkboxgroup') {
@@ -43,7 +49,24 @@ test('every checkboxgroup option is a plain STRING', () => {
       }
     }
   }
-  assert.ok(seen > 0, 'expected at least one checkboxgroup option to check');
+  assert.strictEqual(seen, 0,
+    'the page is expected to have no checkboxgroup (the weekdays live in the '
+    + 'alarmList component); if one was added, keep it to plain-string options');
+});
+
+test('the alarm list is one alarmList component, not per-slot items', () => {
+  // The regression this guards: the eight Slot<N>{On,Time,Days} blocks were only
+  // ever revealed one at a time (slot i visible iff slot i-1 had a time), so the
+  // page looked like it held two alarms rather than eight. Reported 2026-07-31.
+  const list = items.filter((i) => i.type === 'alarmList');
+  assert.strictEqual(list.length, 1, 'expected exactly one alarmList component');
+  assert.strictEqual(list[0].messageKey, 'AlarmList');
+  assert.strictEqual(typeof list[0].defaultValue, 'string',
+    "the component's value is the AlarmSet wire string, so defaultValue must be one");
+  const slotItems = keyed.filter((i) => /^Slot\d+(On|Time|Days)$/.test(i.messageKey));
+  assert.strictEqual(slotItems.length, 0,
+    'per-slot alarm items are replaced by the alarmList component, found: '
+    + slotItems.map((i) => i.messageKey).join(', '));
 });
 
 test('every radiogroup and select option value is a STRING', () => {
@@ -109,15 +132,13 @@ test('every numeric-valued control (slider, or an all-numeric select) is in NUME
   }
 });
 
-test('every toggle that is a real settable key (not an alarm-slot toggle folded into AlarmSet) is in BOOL_KEYS', () => {
-  // Slot<N>On toggles are deliberately excluded: they are not sent as their
-  // own message key at all (there is no MESSAGE_KEY_Slot1On etc. -- see
-  // package.json), they are packed into the AlarmSet string by
-  // slotsFromSettings/packAlarmSet instead. Every OTHER toggle on this page
-  // (SmartEnabled, LightPulse, DstCheck) is a real message key and must
-  // convert through BOOL_KEYS or the watch never hears it.
+test('every toggle is in BOOL_KEYS', () => {
+  // Every toggle on this page (SmartEnabled, EscRampVib, LightPulse, DstCheck) is
+  // a real message key and must convert through BOOL_KEYS or the watch never
+  // hears it. The per-alarm enabled flags are not toggles any more -- they are
+  // buttons inside the alarmList component, folded into the AlarmSet string.
   for (const i of keyed) {
-    if (i.type === 'toggle' && !/^Slot\d+On$/.test(i.messageKey)) {
+    if (i.type === 'toggle') {
       assert.ok(BOOL_KEYS.includes(i.messageKey),
         i.messageKey + ' is a toggle but is not in BOOL_KEYS');
     }
@@ -135,8 +156,7 @@ test('NUMERIC_KEYS and BOOL_KEYS only name keys the page actually has', () => {
 
 test('buildDict converts strings to ints and leaves AlarmSet a string', () => {
   const settings = {
-    Slot1On: { value: true }, Slot1Time: { value: '07:00' },
-    Slot1Days: { value: [true, true, true, true, true, false, false] },
+    AlarmList: { value: '07:00|1111100' },
     SmartEnabled: { value: true },
     SmartWindowMin: { value: '30' },
     TimeSemantics: { value: '0' },
@@ -160,8 +180,34 @@ test('buildDict converts strings to ints and leaves AlarmSet a string', () => {
   assert.strictEqual(dict.SmartEnabled, 1);
   assert.strictEqual(dict.DstCheck, 0);
   // a missing key is omitted rather than sent as NaN
-  const sparse = buildDict({ Slot1Time: { value: '06:00' }, Slot1On: { value: true },
-                             Slot1Days: { value: [] } });
+  const sparse = buildDict({ AlarmList: { value: '06:00|0000000' } });
   assert.strictEqual(sparse.SmartWindowMin, undefined);
   assert.ok(!Object.values(sparse).some((v) => typeof v === 'number' && isNaN(v)));
+});
+
+test('buildDict canonicalizes the list value and drops malformed entries', () => {
+  // The component reads raw DOM, so its value must not be trusted verbatim: it
+  // goes through the same host-tested packer the watch's parser is contract-tested
+  // against. Garbage must be dropped here, not parsed on an alarm clock.
+  assert.strictEqual(buildDict({ AlarmList: { value: '7:00|1111100' } }).AlarmSet,
+    '07:00|1111100', 'a single-digit hour is normalized');
+  assert.strictEqual(buildDict({ AlarmList: { value: '25:00|1111111' } }).AlarmSet,
+    '', 'an impossible hour is dropped');
+  assert.strictEqual(buildDict({ AlarmList: { value: '07:00|111' } }).AlarmSet,
+    '', 'a short weekday mask is dropped');
+  assert.strictEqual(
+    buildDict({ AlarmList: { value: '07:00|1111100;nonsense;-08:30|0000011' } }).AlarmSet,
+    '07:00|1111100;-08:30|0000011', 'a bad entry is dropped, the good ones survive');
+  assert.strictEqual(buildDict({ AlarmList: { value: '' } }).AlarmSet, '',
+    'no alarms is a legitimate value, not a reason to fall back to the legacy path');
+});
+
+test('buildDict still reads legacy per-slot settings when there is no list value', () => {
+  // A phone whose clay-settings predates the list component and whose migration
+  // has not run yet must not lose its alarms.
+  const dict = buildDict({
+    Slot1On: { value: true }, Slot1Time: { value: '06:45' },
+    Slot1Days: { value: [true, true, true, true, true, false, false] },
+  });
+  assert.strictEqual(dict.AlarmSet, '06:45|1111100');
 });

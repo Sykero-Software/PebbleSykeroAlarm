@@ -154,11 +154,78 @@ test('live change: turning the smart alarm off hides its detail fields', () => {
   assert.strictEqual(c.byId['smart-sens'].shown, false);
 });
 
-test('alarm-slot reveal (Task 8) is unaffected by this task\'s additions', () => {
-  const c = render();
-  // Defaults: slot1 already has a time ('07:00') -> slot2 also revealed;
-  // slot2 has no time -> slot3 stays hidden.
-  assert.strictEqual(c.byId['slot1-time'].shown, true);
-  assert.strictEqual(c.byId['slot2-time'].shown, true);
-  assert.strictEqual(c.byId['slot3-time'].shown, false);
+// The per-slot progressive reveal this file used to test is GONE: the alarmList
+// component owns its own rows, so there is no slot to show or hide. That also
+// removed the reveal's dependence on a `change` event firing from the Android time
+// picker, which was never verified and would have stalled it at slot 2.
+// config_clay.test.js asserts the page has no Slot<N>* items left.
+
+test('ramp-only Custom fields are hidden when the vibration ramp is off (the default)', () => {
+  // With the ramp off these four control nothing: the gap it would tighten TO, the
+  // time it would tighten OVER, and the pulse length/count it would start FROM.
+  const c = render({ 'wake-profile': '3' });   // Custom, esc-ramp defaults to false
+  assert.strictEqual(c.byId['esc-min'].shown, false);
+  assert.strictEqual(c.byId['esc-tighten'].shown, false);
+  assert.strictEqual(c.byId['esc-vibstart'].shown, false);
+  assert.strictEqual(c.byId['esc-pstart'].shown, false);
+  // ... while the three that ARE the flat buzz stay visible.
+  assert.strictEqual(c.byId['esc-lead'].shown, true, 'the constant gap');
+  assert.strictEqual(c.byId['esc-vibmax'].shown, true, 'the pulse length');
+  assert.strictEqual(c.byId['esc-pmax'].shown, true, 'the pulses per buzz');
+});
+
+test('ramp-only Custom fields appear when the vibration ramp is switched on', () => {
+  const c = render({ 'wake-profile': '3', 'esc-ramp': true });
+  assert.strictEqual(c.byId['esc-min'].shown, true);
+  assert.strictEqual(c.byId['esc-tighten'].shown, true);
+  assert.strictEqual(c.byId['esc-vibstart'].shown, true);
+  assert.strictEqual(c.byId['esc-pstart'].shown, true);
+});
+
+test('ramp-only fields stay hidden outside Custom even with the ramp on', () => {
+  const c = render({ 'wake-profile': '1', 'esc-ramp': true });
+  assert.strictEqual(c.byId['esc-min'].shown, false,
+    'must not leak visible when the profile is not Custom');
+  assert.strictEqual(c.byId['esc-tighten'].shown, false);
+});
+
+test('live change: switching the ramp on reveals the ramp-only fields', () => {
+  const c = render({ 'wake-profile': '3' });
+  assert.strictEqual(c.byId['esc-tighten'].shown, false);
+  c.byId['esc-ramp'].value = true;
+  c.byId['esc-ramp'].changeHandlers.forEach((fn) => fn());
+  assert.strictEqual(c.byId['esc-tighten'].shown, true);
+  assert.strictEqual(c.byId['esc-vibstart'].shown, true);
+});
+
+test('a fixed Save bar is injected, with its clearance on #main-form and NOT on body', () => {
+  // Why this matters: an edit left unsaved on a page whose Save button is several
+  // screens down is lost silently, which on 2026-07-31 looked exactly like the watch
+  // ignoring a deleted alarm. And why #main-form: Clay's base CSS sets
+  // html,body{height:100%} with border-box, so a body padding-bottom sits INSIDE the
+  // fixed-height body box and gives zero real clearance -- the last setting then sits
+  // permanently under the bar. TimeStyle shipped that bug once.
+  const appended = [];
+  const byId = {};
+  global.document = {
+    getElementById: (id) => byId[id] || null,
+    createElement: () => ({ id: '', textContent: '' }),
+    head: { appendChild: (el) => { appended.push(el); byId[el.id] = el; } },
+  };
+  try {
+    const c = render();
+    assert.strictEqual(appended.length, 1, 'exactly one <style> appended');
+    const css = appended[0].textContent;
+    assert.ok(/\.component-submit\{[^}]*position:fixed/.test(css),
+      'the Save button must be fixed to the bottom');
+    assert.ok(/#main-form\{[^}]*padding-bottom:\s*\d+px/.test(css),
+      'clearance must be reserved on #main-form (the in-flow scrolling content)');
+    assert.ok(!/(^|[^-])body\s*\{[^}]*padding-bottom/.test(css),
+      'clearance must NOT be put on body -- it yields zero real clearance');
+    // Idempotent: a second AFTER_BUILD must not stack a second <style>.
+    c._handlers.AFTER_BUILD();
+    assert.strictEqual(appended.length, 1, 'injection must be idempotent');
+  } finally {
+    delete global.document;
+  }
 });

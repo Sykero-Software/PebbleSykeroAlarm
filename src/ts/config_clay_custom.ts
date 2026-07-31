@@ -7,31 +7,31 @@
 // helper calls. Only `this`, locals, and native array methods.
 export default function clayConfigCustom(this: any, minified: any): void {
   const clay = this;
-  const SLOTS = 8;
 
-  function apply() {
-    let reveal = true;
-    for (let i = 1; i <= SLOTS; i++) {
-      const on = clay.getItemById('slot' + i + '-on');
-      const time = clay.getItemById('slot' + i + '-time');
-      const days = clay.getItemById('slot' + i + '-days');
-      if (!on || !time || !days) {
-        continue;
-      }
-      if (reveal) {
-        on.show();
-        time.show();
-        days.show();
-      } else {
-        on.hide();
-        time.hide();
-        days.hide();
-      }
-      // The next slot is revealed only once this one has a time. Hidden items
-      // still serialise, so saving is unaffected either way.
-      const v = time.get();
-      reveal = typeof v === 'string' && v.length > 0;
-    }
+  // The eight-slot progressive reveal is gone: the alarmList component adds and
+  // deletes its own rows, so there is nothing to show or hide per slot. It also
+  // removes that logic's dependence on a `change` event firing from the Android
+  // time picker, which was never verified and would have stalled the reveal.
+
+  // A fixed Save bar, so an edit cannot be lost by leaving a long page without
+  // reaching the button at the bottom -- which is exactly what happened on the
+  // phone 2026-07-31 (an alarm looked like it had been deleted and had not been).
+  function injectFloatingSaveStyle(): void {
+    if (typeof document === 'undefined') { return; }
+    if (document.getElementById('sa-floating-save')) { return; }
+    const style = document.createElement('style');
+    style.id = 'sa-floating-save';
+    // The clearance goes on #main-form (the in-flow scrolling content), NOT body:
+    // Clay sets html,body{height:100%} with border-box, so a body padding-bottom
+    // sits INSIDE the fixed-height body box at the first screen's bottom and never
+    // clears the fixed bar -- leaving the last setting permanently unreachable.
+    // (TimeStyle shipped that bug once; 96px vs a bar of ~72px.)
+    style.textContent =
+      '.component-submit{position:fixed;bottom:0;left:0;right:0;margin:0;'
+      + 'z-index:100;background:#262626;padding:8px 0;'
+      + 'box-shadow:0 -2px 6px rgba(0,0,0,0.4);}'
+      + '#main-form{padding-bottom:96px;}';
+    document.head.appendChild(style);
   }
 
   function applyAdvanced() {
@@ -84,14 +84,7 @@ export default function clayConfigCustom(this: any, minified: any): void {
   }
 
   clay.on(clay.EVENTS.AFTER_BUILD, function () {
-    apply();
-    for (let i = 1; i <= SLOTS; i++) {
-      const time = clay.getItemById('slot' + i + '-time');
-      if (time) {
-        time.on('change', apply);
-      }
-    }
-
+    injectFloatingSaveStyle();
     applyAdvanced();
     const sensItem = clay.getItemById('smart-sens');
     if (sensItem) {

@@ -2,7 +2,8 @@
 import { packAlarmSet, unpackAlarmSet, SLOT_COUNT, SlotFields } from './alarm_pack';
 import { buildConfig } from './config_clay';
 import clayConfigCustom from './config_clay_custom';
-import { resendDict, saveDict } from './config_sync';
+import alarmListComponent from './config_alarm_list';
+import { CFG_STORE_KEY, resendDict, saveDict } from './config_sync';
 
 declare const require: any;
 
@@ -19,8 +20,50 @@ function getClay(): any {
   if (!clayInstance) {
     const Clay = require('pebble-clay');
     clayInstance = new Clay(buildConfig(), clayConfigCustom, { autoHandleEvents: false });
+    clayInstance.registerComponent(alarmListComponent);
   }
   return clayInstance;
+}
+
+// One-time seed of the alarmList component's key from whatever held the alarms
+// before it existed. Without this the first open of the new page would show
+// `defaultValue` (a single 07:00 Mon-Fri) and saving would WIPE every other alarm
+// the user had -- a consolidated Clay key never inherits the keys it replaces.
+//
+// Preferred source is the dict config_sync last sent, because its AlarmSet is by
+// definition what the watch currently holds. The legacy per-slot Clay keys are the
+// fallback for a phone that has the config page's state but never completed a send.
+export function migrateAlarmList(get: (k: string) => string | null,
+                                 set: (k: string, v: string) => void): void {
+  let stored: any;
+  try {
+    stored = JSON.parse(get('clay-settings') || '{}') || {};
+  } catch (e) {
+    return;
+  }
+  if (typeof stored !== 'object' || stored === null) { return; }
+  if (stored.AlarmList !== undefined) { return; }   // already migrated
+
+  let seed: string | null = null;
+  try {
+    const raw = get(CFG_STORE_KEY);
+    if (raw) {
+      const d = JSON.parse(raw);
+      if (d && typeof d.AlarmSet === 'string' && d.AlarmSet !== '') { seed = d.AlarmSet; }
+    }
+  } catch (e) {
+    seed = null;
+  }
+  if (seed === null) {
+    // slotsFromSettings works on the flattened clay-settings shape too: val()
+    // returns a raw value unchanged and only unwraps {value:X} when present.
+    const packed = packAlarmSet(slotsFromSettings(stored));
+    if (packed !== '') { seed = packed; }
+  }
+  if (seed === null) { return; }   // nothing to inherit: defaultValue is correct
+
+  stored.AlarmList = seed;
+  set('clay-settings', JSON.stringify(stored));
 }
 
 // Clay returns getSettings(resp, false) in its unflattened {key:{value:X}} form.
@@ -67,7 +110,18 @@ export const BOOL_KEYS = ['SmartEnabled', 'LightPulse', 'DstCheck', 'EscRampVib'
 
 export function buildDict(settings: any): any {
   const dict: any = {};
-  dict.AlarmSet = packAlarmSet(slotsFromSettings(settings));
+  // The alarmList component's value IS the wire string, so this is a pass-through
+  // -- but it goes through unpack+pack rather than being trusted verbatim: that
+  // canonicalizes it and drops anything malformed, using the same host-tested
+  // packer the watch's parser is contract-tested against (test_pack_contract.c).
+  // A component reading raw DOM must not be able to put garbage on the wire.
+  const list = val(settings, 'AlarmList');
+  if (typeof list === 'string') {
+    dict.AlarmSet = packAlarmSet(unpackAlarmSet(list));
+  } else {
+    // Legacy per-slot settings (a config page from before the list component).
+    dict.AlarmSet = packAlarmSet(slotsFromSettings(settings));
+  }
   for (let i = 0; i < NUMERIC_KEYS.length; i++) {
     const k = NUMERIC_KEYS[i];
     const v = val(settings, k);
@@ -102,6 +156,12 @@ function sendCfgOpen(open: boolean): void {
 if (typeof Pebble !== 'undefined') {
   Pebble.addEventListener('showConfiguration', function () {
     sendCfgOpen(true);
+    // Before generateUrl(), which bakes clay-settings into the page: the seed has
+    // to be in the store by the time the page is built, or the first open of the
+    // list would show defaultValue and saving would wipe the user's other alarms.
+    migrateAlarmList(
+      function (k) { return window.localStorage.getItem(k); },
+      function (k, v) { window.localStorage.setItem(k, v); });
     Pebble.openURL(getClay().generateUrl());
   });
 
