@@ -257,6 +257,111 @@ static void open_alarm_list(void) {
   window_stack_push(s_list_window, true);
 }
 
+// --- The "Last night" summary: a calibration tool, not a dismissible post-ring
+// screen. Reachable only from the main menu, so there is no config toggle to
+// disable it and no half-asleep screen the user learns to ignore. ---
+
+static Window      *s_night_window;
+static ScrollLayer *s_night_scroll;
+static TextLayer   *s_night_text;
+static char         s_night_buf[640];
+
+static void fmt_hhmm(uint16_t minute_of_day, char *out, size_t n) {
+  if (minute_of_day == NIGHT_NO_FIRE) {
+    snprintf(out, n, "--:--");
+  } else {
+    snprintf(out, n, "%02d:%02d", minute_of_day / 60, minute_of_day % 60);
+  }
+}
+
+static void build_night_text(void) {
+  NightSummary ns[NIGHT_HISTORY];
+  int n = as_load_nights(ns, NIGHT_HISTORY);
+  size_t off = 0;
+  s_night_buf[0] = '\0';
+  if (n == 0) {
+    snprintf(s_night_buf, sizeof(s_night_buf),
+             "No nights recorded yet.\n\nThe summary appears after the first "
+             "alarm with the smart alarm on.");
+    return;
+  }
+  const NightSummary *t = &ns[0];
+  char onset[8], fired[8];
+  fmt_hhmm(t->onset_min, onset, sizeof(onset));
+  fmt_hhmm(t->fired_min, fired, sizeof(fired));
+
+  if (t->smart_unavailable) {
+    off += snprintf(s_night_buf + off, sizeof(s_night_buf) - off,
+        "Last night\n\nSmart alarm was unavailable.\nCheck that activity "
+        "tracking is on in the watch settings.\n");
+  } else {
+    off += snprintf(s_night_buf + off, sizeof(s_night_buf) - off,
+        "Last night\n\nAsleep from %s\nBaseline %u\nLevel %u\n%s %s\n",
+        onset, t->baseline, t->trigger_level,
+        t->fired_min == NIGHT_NO_FIRE ? "Deadline at" : "Woke you at", fired);
+    off += snprintf(s_night_buf + off, sizeof(s_night_buf) - off,
+        "\nAt other sensitivities:\n");
+    for (int k = 0; k < NIGHT_ALT_COUNT; k++) {
+      char at[8];
+      fmt_hhmm(t->alt_fired_min[k], at, sizeof(at));
+      off += snprintf(s_night_buf + off, sizeof(s_night_buf) - off,
+          "  P%-2u  %s%s\n", t->alt_percentile[k], at,
+          t->alt_percentile[k] == t->percentile ? "  <- in use" : "");
+    }
+  }
+  if (n > 1) {
+    off += snprintf(s_night_buf + off, sizeof(s_night_buf) - off, "\nEarlier:\n");
+    for (int i = 1; i < n; i++) {
+      char at[8];
+      fmt_hhmm(ns[i].fired_min, at, sizeof(at));
+      off += snprintf(s_night_buf + off, sizeof(s_night_buf) - off,
+          "  %s  %s\n", at,
+          ns[i].smart_unavailable ? "unavailable"
+        : ns[i].fired_min == NIGHT_NO_FIRE ? "deadline" : "smart");
+    }
+  }
+}
+
+static void night_window_load(Window *w) {
+  Layer *root = window_get_root_layer(w);
+  GRect b = layer_get_bounds(root);
+  build_night_text();
+
+  s_night_scroll = scroll_layer_create(b);
+  scroll_layer_set_click_config_onto_window(s_night_scroll, w);
+  // The default shadow dithers over the last visible line whenever there is
+  // more content to scroll to (confirmed by a zoomed screenshot: it degraded
+  // "P75 06:33" into a speckled mess) -- this screen's own text is the only
+  // scroll affordance it needs.
+  scroll_layer_set_shadow_hidden(s_night_scroll, true);
+
+  GRect tb = GRect(4, 0, b.size.w - 8, 2000);
+  s_night_text = text_layer_create(tb);
+  text_layer_set_font(s_night_text, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  text_layer_set_overflow_mode(s_night_text, GTextOverflowModeWordWrap);
+  text_layer_set_text(s_night_text, s_night_buf);
+  GSize used = text_layer_get_content_size(s_night_text);
+  text_layer_set_size(s_night_text, GSize(b.size.w - 8, used.h + 8));
+  scroll_layer_set_content_size(s_night_scroll, GSize(b.size.w, used.h + 16));
+  scroll_layer_add_child(s_night_scroll, text_layer_get_layer(s_night_text));
+  layer_add_child(root, scroll_layer_get_layer(s_night_scroll));
+}
+
+static void night_window_unload(Window *w) {
+  text_layer_destroy(s_night_text);
+  scroll_layer_destroy(s_night_scroll);
+}
+
+static void open_last_night(void) {
+  if (!s_night_window) {
+    s_night_window = window_create();
+    window_set_window_handlers(s_night_window, (WindowHandlers){
+      .load = night_window_load, .unload = night_window_unload,
+    });
+  }
+  window_stack_push(s_night_window, true);
+}
+
 static uint16_t main_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
   return MAIN_ROW_COUNT;
 }
@@ -310,7 +415,7 @@ static void add_test_alarm(void) {
 static void main_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
   switch (ci->row) {
     case MAIN_ROW_ALARMS:     open_alarm_list(); break;
-    case MAIN_ROW_LAST_NIGHT: /* Task 12 pushes the summary window here */ break;
+    case MAIN_ROW_LAST_NIGHT: open_last_night(); break;
     case MAIN_ROW_TEST:       add_test_alarm(); break;
     default: break;
   }
@@ -498,6 +603,21 @@ static void update_ring_text(void) {
 
 static void burst_cb(void *data);
 static void ring_minute_tick(struct tm *t, TimeUnits units);
+
+// Tentative declarations: start_ring (below) reads these, but their one real
+// definition (with the comment explaining them) lives later in the file, in
+// the smart-window section Task 11 built -- a plain static declaration is
+// legal to repeat at file scope in C as long as only one carries an
+// initializer, so this does not conflict with that later definition.
+static SleepEvalResult s_last_eval;
+static HistoryRead s_last_read;
+
+// Forward declaration: start_ring calls this, but its definition (below) needs
+// s_last_eval/s_last_read above -- placed here so record_night's real body,
+// defined later once the smart-window helpers it also needs exist, can be
+// called from start_ring regardless.
+static void record_night(const SleepEvalResult *r, const HistoryRead *hr,
+                         bool fired_by_deadline);
 
 static void schedule_next_burst(uint16_t gap_s) {
   if (s_burst_timer) {
@@ -964,6 +1084,17 @@ static void start_ring(int slot, bool from_deadline) {
   s_rs.window_started_at = 0;
   as_save_runstate(&s_rs);
 
+  // Record the night ONCE, on the first ring (never on a snooze resumption --
+  // that would overwrite tonight's record with the same data read again, or
+  // worse, with a stale re-evaluation). s_last_eval/s_last_read hold whatever
+  // the last smart evaluation saw (Task 11); for a plain (non-smart) alarm
+  // they are still the fresh-launch zero defaults, so s_last_read.available
+  // is false and NULL is passed -- which is what makes ns.smart_unavailable
+  // true for a plain alarm's summary.
+  if (s_rs.snooze_count == 0) {
+    record_night(&s_last_eval, s_last_read.available ? &s_last_read : NULL, from_deadline);
+  }
+
   // Keep a wakeup live for the whole ring: if anything kills the app mid-ring
   // (another app's wakeup, a phone-initiated launch), the alarm comes back
   // instead of being lost.
@@ -1097,6 +1228,71 @@ static bool smart_should_ring(SleepEvalResult *out) {
     *out = r;
   }
   return r.fire;
+}
+
+#define NIGHT_ALT_PCTS { 95, 90, 82, 75 }
+
+static uint16_t prv_minute_of_day(time_t t) {
+  struct tm *tm = localtime(&t);
+  return (uint16_t)(tm->tm_hour * 60 + tm->tm_min);
+}
+
+// Forward declaration: record_night calls this, and gcc 14 makes an implicit
+// function declaration a hard error, so it must be visible before the call.
+static long prv_tz_offset(time_t t);
+
+static void record_night(const SleepEvalResult *r, const HistoryRead *hr,
+                         bool fired_by_deadline) {
+  NightSummary ns;
+  memset(&ns, 0, sizeof(ns));
+  time_t now = time(NULL);
+  ns.day_local = (uint32_t)((now + prv_tz_offset(now)) / 86400);
+  ns.smart_unavailable = (hr == NULL || !hr->available) ? 1 : 0;
+
+  uint8_t pct = 90, mins = 2;
+  as_effective_sens(&s_cfg, &pct, &mins);
+  ns.percentile = pct;
+
+  if (hr != NULL && hr->available) {
+    ns.onset_min = prv_minute_of_day(hr->first_utc);
+    ns.baseline = r ? r->baseline : 0;
+    ns.trigger_level = r ? r->trigger_level : 0;
+    ns.acc_at_fire = r ? r->acc : 0;
+    ns.fired_min = fired_by_deadline ? NIGHT_NO_FIRE : prv_minute_of_day(now);
+
+    // What the other sensitivities would have done to this same night.
+    static const uint8_t k_alt[NIGHT_ALT_COUNT] = NIGHT_ALT_PCTS;
+    for (int k = 0; k < NIGHT_ALT_COUNT; k++) {
+      SleepEvalCfg c;
+      se_default_cfg(&c, k_alt[k], mins);
+      SleepEvalResult ar = se_evaluate(s_night, hr->count, hr->window_start,
+                                       false /* ignore the veto for the what-if */, &c);
+      ns.alt_percentile[k] = k_alt[k];
+      ns.alt_fired_min[k] = ar.fire
+          ? prv_minute_of_day(hr->first_utc + (time_t)ar.fired_index * SECONDS_PER_MINUTE)
+          : NIGHT_NO_FIRE;
+    }
+  } else {
+    ns.onset_min = NIGHT_NO_FIRE;
+    ns.fired_min = NIGHT_NO_FIRE;
+    for (int k = 0; k < NIGHT_ALT_COUNT; k++) {
+      ns.alt_fired_min[k] = NIGHT_NO_FIRE;
+    }
+  }
+  as_push_night(&ns);
+  APP_LOG(APP_LOG_LEVEL_INFO, "NIGHT recorded base=%u level=%u fired=%d",
+          ns.baseline, ns.trigger_level, ns.fired_min);
+}
+
+// Converts UTC to the local day number without depending on timegm.
+static long prv_tz_offset(time_t t) {
+  struct tm lt = *localtime(&t);
+  struct tm gt = *gmtime(&t);
+  long dh = (lt.tm_hour - gt.tm_hour) * 3600L + (lt.tm_min - gt.tm_min) * 60L;
+  int dd = lt.tm_mday - gt.tm_mday;
+  if (dd == 1 || dd < -1) dh += 86400L;
+  else if (dd == -1 || dd > 1) dh -= 86400L;
+  return dh;
 }
 
 static void poll_cb(void *data) {
@@ -1341,6 +1537,7 @@ int main(void) {
   as_save_runstate(&s_rs);
   if (s_list_window) window_destroy(s_list_window);
   if (s_ring_window) window_destroy(s_ring_window);
+  if (s_night_window) window_destroy(s_night_window);
   window_destroy(s_main_window);
   return 0;
 }

@@ -433,6 +433,26 @@ int main(void) {
     assert(r.fire);
   }
 
+  // --- the four percentiles the Last night summary shows, on a night where they
+  // genuinely differ. Lower percentile => fires no later.
+  {
+    g_seed = 42;
+    fill_rest(N, 45, 25);
+    for (int i = WIN + 3;  i < WIN + 8;  i++) g_s[i].vmc = 250;
+    for (int i = WIN + 12; i < WIN + 17; i++) g_s[i].vmc = 700;
+    for (int i = WIN + 22; i < WIN + 28; i++) g_s[i].vmc = 2000;
+    const uint8_t summary_pcts[4] = { 75, 82, 90, 95 };
+    int prev = -1;
+    for (int k = 0; k < 4; k++) {
+      SleepEvalCfg c = cfg_for(summary_pcts[k], 2);
+      SleepEvalResult r = se_evaluate(g_s, N, WIN, false, &c);
+      int at = r.fire ? r.fired_index : 1 << 30;
+      printf("  summary P%-2u at=%d\n", summary_pcts[k], r.fire ? r.fired_index : -1);
+      assert(at >= prev);
+      prev = at;
+    }
+  }
+
   printf("test_sleep_eval: all assertions passed\n");
   return 0;
 }
