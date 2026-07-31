@@ -1338,7 +1338,24 @@ static Window    *s_wait_window;
 static TextLayer *s_wait_time;
 static TextLayer *s_wait_sub;
 static AppTimer  *s_poll_timer;
-static SleepMinute s_night[SE_MAX_SAMPLES];   // static: 720 * 4 B does not fit the stack
+// static, not a local: 720 * 4 B does not fit the ~2 KB app stack.
+//
+// ... but only where those 720 minutes can ever arrive. On a platform with no
+// Health API hr_read_night has no implementation at all (health_read.c is one big
+// PBL_IF_HEALTH_ELSE) and always reports "unavailable", and sc_window_start
+// collapses the smart window onto the deadline -- so the full-night buffer would
+// be 2.8 KB of permanently untouched static RAM. aplite has 24 KB of app RAM and
+// already spends ~22 KB of it on the static footprint, so that 2.8 KB is the
+// difference between working and not: without this, the ~900 bytes the config
+// handshake added took aplite's free heap under 640 B and app_message_open began
+// returning APP_MSG_OUT_OF_MEMORY -- no messaging at all, i.e. the alarms could
+// not be configured from the phone. Verified on the aplite emulator both ways.
+#if PBL_IF_HEALTH_ELSE(1, 0)
+#define S_NIGHT_LEN SE_MAX_SAMPLES
+#else
+#define S_NIGHT_LEN 1
+#endif
+static SleepMinute s_night[S_NIGHT_LEN];
 
 static void wait_window_update(void) {
   // Guarded for the same reason as update_ring_text: a timer callback (the
@@ -1421,7 +1438,9 @@ static bool smart_should_ring(SleepEvalResult *out) {
   SleepEvalCfg sc;
   se_default_cfg(&sc, pct, mins);
 
-  HistoryRead hr = hr_read_night(s_night, SE_MAX_SAMPLES,
+  // S_NIGHT_LEN, not SE_MAX_SAMPLES: the buffer is collapsed on platforms with no
+  // Health API (see its definition), and the length passed must match the buffer.
+  HistoryRead hr = hr_read_night(s_night, S_NIGHT_LEN,
                                  (time_t)s_rs.window_started_at);
   s_last_read = hr;
   if (!hr.available || hr.window_start < 0) {

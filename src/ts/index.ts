@@ -124,27 +124,48 @@ if (typeof Pebble !== 'undefined') {
       function (err: any) { console.log('SmartAlarm: send failed ' + JSON.stringify(err)); });
   });
 
-  // The watch asks for its config on every launch (main.c's request_config) --
-  // see config_sync.ts for why that handshake exists at all.
+  // Send the last-saved config to the watch. Called from BOTH directions of the
+  // launch handshake below, because either one alone can lose the race:
+  //
+  //  - The watch asks (main.c's request_config, key CfgRequest) as the last thing
+  //    it does in main(). But PKJS is started BY the watchapp launching and dies
+  //    with it, so it is cold-starting at exactly that moment -- verified on the
+  //    diorite emulator, where two CfgRequests were sent by the watch and NEITHER
+  //    reached this listener, because it was not registered yet.
+  //  - So the phone also pushes, unprompted, as soon as it is ready (the same
+  //    thing PebbleTuyaControl does in its `ready` handler). By then the watch
+  //    has long since called app_message_open.
+  //
+  // Sending twice is harmless: the watch's inbox handler is idempotent (it parses
+  // the same AlarmSet and saves the same config), so whichever of the two lands
+  // wins and the other is a no-op.
+  // A `var`-assigned function expression, not a function declaration: this block
+  // is inside the `typeof Pebble !== 'undefined'` guard, and TS/ES5 strict mode
+  // forbids a function DECLARATION inside a block (TS1252).
+  var sendSavedConfig = function (why: string): void {
+    const dict = resendDict(function (k) { return window.localStorage.getItem(k); });
+    if (!dict) {
+      // Nothing was ever saved on this phone: stay silent rather than send an
+      // empty dict, which would clobber the watch's own persisted state.
+      console.log('SmartAlarm: ' + why + ' but nothing saved yet -- staying silent');
+      return;
+    }
+    console.log('SmartAlarm: ' + why + ' -> sending saved AlarmSet=' + dict.AlarmSet);
+    Pebble.sendAppMessage(dict,
+      function () { console.log('SmartAlarm: saved config delivered'); },
+      function (err: any) { console.log('SmartAlarm: saved config send failed ' + JSON.stringify(err)); });
+  };
+
   Pebble.addEventListener('appmessage', function (e: any) {
     const p = e && e.payload;
     if (!p || p.CfgRequest === undefined || p.CfgRequest === null) {
       return;
     }
-    const dict = resendDict(function (k) { return window.localStorage.getItem(k); });
-    if (!dict) {
-      // Nothing was ever saved on this phone: stay silent rather than send an
-      // empty dict, which would clobber the watch's own persisted state.
-      console.log('SmartAlarm: CfgRequest but nothing saved yet -- staying silent');
-      return;
-    }
-    console.log('SmartAlarm: CfgRequest -> resending AlarmSet=' + dict.AlarmSet);
-    Pebble.sendAppMessage(dict,
-      function () { console.log('SmartAlarm: config resent'); },
-      function (err: any) { console.log('SmartAlarm: resend failed ' + JSON.stringify(err)); });
+    sendSavedConfig('CfgRequest');
   });
 
   Pebble.addEventListener('ready', function () {
     console.log('SmartAlarm PKJS ready');
+    sendSavedConfig('PKJS ready');
   });
 }
