@@ -29,7 +29,13 @@ void sc_cancel_all(void);
 // Re-arm all wakeups from scratch: cancel everything, then schedule in priority
 // order with WC_DEADLINE first so that if slots run out the alarm still rings.
 // Called at launch, after any settings change, and after every wakeup fires.
-void sc_rearm(const Alarm *alarms, int count, const Config *cfg,
+//
+// Returns false if a wakeup this function treats as CRITICAL could not be
+// scheduled (currently: the pending snooze wakeup, when RunState says one is
+// due) -- true otherwise, including when there was nothing critical to arm.
+// A caller that is about to exit the app on the strength of "the wakeup is
+// armed" (ring_snooze_now) must check this rather than assume success.
+bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
               const RunState *rs, time_t now);
 
 // (Re)place the rolling re-entry wakeup SC_REENTRY_GAP_S from now.

@@ -334,17 +334,52 @@ static uint32_t s_hold_ms;          // long-press progress, 0..STOP_HOLD_MS
 static AppTimer *s_hold_timer;
 static AppTimer *s_hint_timer;
 
-#define STOP_HOLD_MS   2000
+#define STOP_HOLD_MS       2000
+// window_long_click_subscribe's own recognition delay: kept short so the
+// progress bar appears (already partly filled, at STOP_HOLD_DELAY_MS/
+// STOP_HOLD_MS) almost as soon as the button goes down, rather than only
+// after the full STOP_HOLD_MS -- which is what made a 2 s hold read as ~4 s
+// with zero feedback for the first half.
+#define STOP_HOLD_DELAY_MS 300
 #define HINT_SHOW_MS   1500
 
 static uint32_t ring_elapsed_s(void) {
   if (s_rs.ring_started_at == 0) {
     return 0;
   }
+  EscParams e;
+  as_effective_esc(&s_cfg, &e);
+
   time_t now = time(NULL);
   uint32_t base = (uint32_t)s_rs.snooze_count * s_cfg.snooze_ramp_offset_s;
+  // Unlimited snoozing (snooze_max == 0) must never go silent: past a certain
+  // count, base alone already exceeds cap_s and esc_step would report
+  // over_cap on the very first burst of the resumed ring even though the user
+  // is actively pressing Snooze, not ignoring the alarm. Clamp to full
+  // development instead -- an exhausted ramp stays at maximum escalation,
+  // never mute. (esc_clamp guarantees full development happens strictly
+  // before cap_s, so this is always < cap_s.)
+  if (base >= e.cap_s) {
+    base = esc_full_development_s(&e);
+  }
+
   long d = (long)(now - (time_t)s_rs.ring_started_at);
-  if (d < 0) d = 0;
+  // ring_started_at is deliberately in the future while a snooze is pending
+  // (its expiry), and briefly negative right after an E_RANGE-shifted snooze
+  // wakeup fires a minute or two early -- clamp rather than wrap the unsigned
+  // return.
+  if (d < 0) {
+    d = 0;
+  }
+  // Defensive: a ring_started_at stale by more than a full cap_s -- state this
+  // function did not anticipate, from some path other than the ones already
+  // fixed above -- must never make an alarm open already past its cap and play
+  // nothing. Treat it as starting now instead. start_ring's from_deadline
+  // reset is the primary defence; this is belt and braces for anything that
+  // isn't.
+  if (d > (long)e.cap_s) {
+    d = 0;
+  }
   return base + (uint32_t)d;
 }
 
@@ -401,8 +436,21 @@ static void burst_cb(void *data) {
     speaker_stop();
 #endif
     if (s_light_timer) { app_timer_cancel(s_light_timer); s_light_timer = NULL; }
-    light_enable(false);
-    as_save_runstate(&s_rs);
+    if (s_cfg.light_pulse) {
+      light_enable(false);
+    }
+    // Clear s_ringing so a LATER wakeup arriving in this same process (another
+    // alarm's WC_DEADLINE, or a stray WC_SNOOZE) is not swallowed by the
+    // "already ringing" guard in handle_wakeup_cookie -- a missed alarm must
+    // not also silence the next one.
+    s_ringing = false;
+    // Persist AND re-arm: a missed alarm must not leave the wakeup chain
+    // empty. The launch-time sc_rearm and start_ring's own keep-alive are both
+    // already spent by the time the cap is reached, so without this a missed
+    // alarm with dst_check off could leave zero wakeups scheduled and no
+    // alarm would ever fire again. reload_and_rearm both saves RunState and
+    // re-schedules from the current alarms/config/state.
+    reload_and_rearm();
     return;
   }
 
@@ -417,11 +465,22 @@ static void stop_ring_output(void) {
   if (s_burst_timer) { app_timer_cancel(s_burst_timer); s_burst_timer = NULL; }
   if (s_light_timer) { app_timer_cancel(s_light_timer); s_light_timer = NULL; }
   if (s_hold_timer)  { app_timer_cancel(s_hold_timer);  s_hold_timer = NULL; }
+  // Without this, pressing DOWN once (showing the hint) then UP within
+  // HINT_SHOW_MS leaves hint_hide_cb pending against a TextLayer that
+  // ring_window_unload may since have destroyed.
+  if (s_hint_timer)  { app_timer_cancel(s_hint_timer);  s_hint_timer = NULL; }
   vibes_cancel();
 #ifdef PBL_SPEAKER
   speaker_stop();
 #endif
-  light_enable(false);
+  if (s_cfg.light_pulse) {
+    light_enable(false);
+  }
+  // The minute tick is only wanted while the ring is up; leaving it subscribed
+  // would have ring_minute_tick write to layers ring_window_unload may since
+  // have destroyed, once anything pops the ring window without exiting the
+  // app outright (Task 11's smart window is exactly such a path).
+  tick_timer_service_unsubscribe();
 }
 
 static void ring_stop_now(void) {
@@ -445,8 +504,6 @@ static void ring_stop_now(void) {
 }
 
 static void ring_snooze_now(void) {
-  EscParams e;
-  as_effective_esc(&s_cfg, &e);
   // Out of snoozes (or snoozing disabled) behaves as Stop rather than doing
   // nothing, so the button is never inert.
   if (s_cfg.snooze_min == 0
@@ -455,37 +512,81 @@ static void ring_snooze_now(void) {
     ring_stop_now();
     return;
   }
+
+  uint32_t prev_ring_started_at = s_rs.ring_started_at;
+  uint8_t  prev_snooze_count = s_rs.snooze_count;
+
   stop_ring_output();
   s_rs.snooze_count++;
   // ring_started_at is moved to the snooze expiry so ring_elapsed_s() resumes
   // from the right place, and so sc_rearm can re-derive the snooze wakeup after
-  // a relaunch (it reads this field directly — see scheduler.c).
+  // a relaunch (it reads this field directly — see scheduler.c). Set and saved
+  // BEFORE the re-arm below, since sc_rearm reads it.
   time_t until = time(NULL) + (time_t)s_cfg.snooze_min * SECONDS_PER_MINUTE;
   s_rs.ring_started_at = (uint32_t)until;
   as_save_runstate(&s_rs);
-  // start_ring armed a WC_SNOOZE keep-alive SC_REENTRY_GAP_S (180 s) out. Every
-  // snooze length on offer is longer than that, so without cancelling it first
-  // the stale wakeup would fire ~3 min in and re-ring long before the snooze the
-  // user asked for. There is no selective cancel, so drop everything and let the
-  // snooze wakeup below (and the sc_rearm on the next launch) restore the rest.
-  sc_cancel_all();
-  sc_schedule(until, WC_SNOOZE);
+
+  // Re-arm through sc_rearm rather than a manual sc_cancel_all()+sc_schedule()
+  // of just this one wakeup (superseding the earlier, narrower amendment).
+  // sc_rearm still cancels everything first, which is what kills the stale
+  // SC_REENTRY_GAP_S (180 s) keep-alive start_ring armed -- every snooze
+  // length on offer is longer than that, so leaving it live would fire ~3 min
+  // in and re-ring before the snooze the user asked for. But unlike a bare
+  // cancel-then-schedule, sc_rearm ALSO re-arms every other alarm's own
+  // WC_DEADLINE at priority 1 (a bare cancel+schedule would silently drop a
+  // second alarm's deadline until this snooze's wakeup happened to fire and
+  // re-arm it -- e.g. snoozing a 07:00 alarm for 10 minutes would silently
+  // swallow a 07:05 alarm), and it derives the snooze wakeup itself from
+  // ring_started_at (already set above) via the exact same logic every other
+  // caller of sc_rearm uses, so there is exactly one code path that computes
+  // that wakeup rather than two that could disagree.
+  bool armed = sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL));
   APP_LOG(APP_LOG_LEVEL_INFO, "SNOOZE #%d until %lu (ramp offset %d s)",
           s_rs.snooze_count, (unsigned long)until,
           s_rs.snooze_count * s_cfg.snooze_ramp_offset_s);
+
+  if (!armed) {
+    // The snooze wakeup itself could not be scheduled (every +/-2 min E_RANGE
+    // shift was rejected, or the device is out of wakeup slots). Exiting to
+    // the watchface now would silently lose the alarm with nothing on screen
+    // to show for it, so don't: undo the snooze bookkeeping, re-arm a plain
+    // keep-alive for the continued ring (sc_rearm's cancel just dropped it),
+    // and keep ringing -- the ring's own escalation/cap is the fallback that
+    // is still guaranteed to fire, and the user can try Snooze again.
+    APP_LOG(APP_LOG_LEVEL_ERROR, "SNOOZE could not be armed -- staying ringing");
+    s_rs.ring_started_at = prev_ring_started_at;
+    s_rs.snooze_count = prev_snooze_count;
+    as_save_runstate(&s_rs);
+    sc_schedule(time(NULL) + SC_REENTRY_GAP_S, WC_SNOOZE);
+    s_ringing = true;
+    burst_cb(NULL);
+    return;
+  }
+
   close_to_watchface();
 }
 
 static void hint_hide_cb(void *data) {
   s_hint_timer = NULL;
   layer_set_hidden(text_layer_get_layer(s_ring_hint), true);
+  // The hint shares the subtitle's slot (see ring_window_load) -- restore it.
+  layer_set_hidden(text_layer_get_layer(s_ring_sub), false);
 }
 
 static void show_press_again_hint(void) {
   uint8_t need = (s_cfg.stop_gesture == STOP_THREE_TAP) ? 3 : 2;
   static char hint[24];
-  snprintf(hint, sizeof(hint), "Press %d\xC3\x97 to stop", need);
+  // Plain ASCII "x", not the U+00D7 multiplication sign: GOTHIC_18_BOLD has no
+  // glyph for it, so it rendered as a tofu box ("2<box> = Stop") on the actual
+  // ring screen -- confirmed by pixel-zooming an emulator screenshot. This is
+  // the one instruction a half-asleep user actually reads, so it must render.
+  snprintf(hint, sizeof(hint), "Press %dx to stop", need);
   text_layer_set_text(s_ring_hint, hint);
+  // The hint reuses the subtitle's exact slot (see ring_window_load) rather
+  // than needing its own vertical room, which the 144x168 boards do not have
+  // once the button labels claim their 22%/78% bands -- so hide one to show
+  // the other.
+  layer_set_hidden(text_layer_get_layer(s_ring_sub), true);
   layer_set_hidden(text_layer_get_layer(s_ring_hint), false);
   if (s_hint_timer) {
     app_timer_cancel(s_hint_timer);
@@ -517,8 +618,14 @@ static void hold_tick_cb(void *data) {
 }
 
 static void ring_down_hold_start(ClickRecognizerRef rec, void *ctx) {
-  s_hold_ms = 0;
+  // The button has already been down for STOP_HOLD_DELAY_MS by the time this
+  // fires (that is what window_long_click_subscribe's delay_ms means), so the
+  // bar starts already partly filled instead of at 0% -- total real hold time
+  // to stop is still STOP_HOLD_MS from the physical press, not STOP_HOLD_MS
+  // AFTER this callback.
+  s_hold_ms = STOP_HOLD_DELAY_MS;
   layer_set_hidden(s_ring_progress, false);
+  layer_mark_dirty(s_ring_progress);
   if (s_hold_timer) app_timer_cancel(s_hold_timer);
   s_hold_timer = app_timer_register(100, hold_tick_cb, NULL);
 }
@@ -542,7 +649,7 @@ static void ring_noop(ClickRecognizerRef rec, void *ctx) {}
 static void ring_click_config(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_UP, ring_up);
   if (s_cfg.stop_gesture == STOP_LONG_PRESS) {
-    window_long_click_subscribe(BUTTON_ID_DOWN, STOP_HOLD_MS,
+    window_long_click_subscribe(BUTTON_ID_DOWN, STOP_HOLD_DELAY_MS,
                                 ring_down_hold_start, ring_down_hold_release);
   } else {
     uint8_t need = (s_cfg.stop_gesture == STOP_THREE_TAP) ? 3 : 2;
@@ -564,38 +671,65 @@ static void ring_window_load(Window *w) {
   GRect b = layer_get_bounds(root);
   window_set_background_color(w, GColorWhite);
 
-  s_ring_time = text_layer_create(GRect(0, b.size.h / 2 - 44, b.size.w, 44));
-  text_layer_set_font(s_ring_time, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
-  text_layer_set_text_alignment(s_ring_time, GTextAlignmentCenter);
-  text_layer_set_background_color(s_ring_time, GColorClear);
-  layer_add_child(root, text_layer_get_layer(s_ring_time));
+  // Follows PebbleCountdownTimer's alarm screen (src/c/main.c:344-399): the two
+  // button labels in GOTHIC_28_BOLD, right-aligned and positioned vertically AT
+  // their physical buttons (UP ~22% of height, DOWN ~78%) -- readable at arm's
+  // length by someone who just woke up, instead of GOTHIC_18 tucked into a
+  // corner. Keeping the labels to one short word each ("Snooze"/"Stop") is what
+  // lets 28 bold fit at 144 px; which GESTURE stops the alarm is taught by the
+  // hint on the first press, not by the button label.
+  const int up_y   = b.size.h * 22 / 100 - 16;
+  const int down_y = b.size.h * 78 / 100 - 18;
 
-  s_ring_sub = text_layer_create(GRect(0, b.size.h / 2, b.size.w, 24));
-  text_layer_set_font(s_ring_sub, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
-  text_layer_set_text_alignment(s_ring_sub, GTextAlignmentCenter);
-  text_layer_set_background_color(s_ring_sub, GColorClear);
-  layer_add_child(root, text_layer_get_layer(s_ring_sub));
-
-  s_ring_up = text_layer_create(GRect(0, 6, b.size.w - 4, 20));
-  text_layer_set_font(s_ring_up, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  s_ring_up = text_layer_create(GRect(0, up_y, b.size.w - 6, 34));
+  text_layer_set_font(s_ring_up, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
   text_layer_set_text_alignment(s_ring_up, GTextAlignmentRight);
   text_layer_set_text(s_ring_up, "Snooze");
   text_layer_set_background_color(s_ring_up, GColorClear);
   layer_add_child(root, text_layer_get_layer(s_ring_up));
 
-  s_ring_down = text_layer_create(GRect(0, b.size.h - 28, b.size.w - 4, 20));
-  text_layer_set_font(s_ring_down, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  // "Stop" is now constant regardless of s_cfg.stop_gesture -- at 28 bold,
+  // "2x = Stop" would overflow 144 px, and which button stops the alarm is all
+  // this label needs to say; the hint (multi-tap) or the progress bar
+  // (long-press) teaches the gesture itself.
+  s_ring_down = text_layer_create(GRect(0, down_y, b.size.w - 6, 34));
+  text_layer_set_font(s_ring_down, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
   text_layer_set_text_alignment(s_ring_down, GTextAlignmentRight);
-  text_layer_set_text(s_ring_down,
-      s_cfg.stop_gesture == STOP_LONG_PRESS ? "Hold = Stop"
-    : s_cfg.stop_gesture == STOP_THREE_TAP  ? "3\xC3\x97 = Stop"
-                                            : "2\xC3\x97 = Stop");
+  text_layer_set_text(s_ring_down, "Stop");
   text_layer_set_background_color(s_ring_down, GColorClear);
   layer_add_child(root, text_layer_get_layer(s_ring_down));
 
-  s_ring_hint = text_layer_create(GRect(0, b.size.h - 52, b.size.w - 4, 20));
+  // Time + subtitle share the band left between the two button labels. On a
+  // 144x168 board that band is only ~59 px once the labels claim their 34 px
+  // each at 22%/78% -- not enough for BITHAM_42_BOLD plus a full subtitle line
+  // with any margin, so the split is proportional (60/40) and verified by
+  // screenshot rather than assumed (see the task report for both boards).
+  const int mid_top = up_y + 34 + 2;    // just under the UP label, 2 px gap
+  const int mid_h   = down_y - mid_top; // whatever room is left above DOWN
+  const int time_h  = mid_h * 6 / 10;
+  const int sub_h   = mid_h - time_h;
+
+  s_ring_time = text_layer_create(GRect(0, mid_top, b.size.w, time_h));
+  text_layer_set_font(s_ring_time, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
+  text_layer_set_text_alignment(s_ring_time, GTextAlignmentCenter);
+  text_layer_set_background_color(s_ring_time, GColorClear);
+  layer_add_child(root, text_layer_get_layer(s_ring_time));
+
+  s_ring_sub = text_layer_create(GRect(0, mid_top + time_h, b.size.w, sub_h));
+  text_layer_set_font(s_ring_sub, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  text_layer_set_text_alignment(s_ring_sub, GTextAlignmentCenter);
+  text_layer_set_background_color(s_ring_sub, GColorClear);
+  layer_add_child(root, text_layer_get_layer(s_ring_sub));
+
+  // The hint reuses the subtitle's exact slot (hidden/shown together, never
+  // both at once -- see show_press_again_hint/hint_hide_cb): there is no
+  // separate room for it once the button labels claim their bands. It
+  // temporarily replaces "Alarm"/"Snooze N" for its brief HINT_SHOW_MS,
+  // which is an acceptable trade since it is the one instruction a
+  // half-asleep user actually needs to read.
+  s_ring_hint = text_layer_create(GRect(0, mid_top + time_h, b.size.w, sub_h));
   text_layer_set_font(s_ring_hint, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
-  text_layer_set_text_alignment(s_ring_hint, GTextAlignmentRight);
+  text_layer_set_text_alignment(s_ring_hint, GTextAlignmentCenter);
   text_layer_set_background_color(s_ring_hint, GColorClear);
   layer_add_child(root, text_layer_get_layer(s_ring_hint));
   layer_set_hidden(text_layer_get_layer(s_ring_hint), true);
@@ -609,12 +743,12 @@ static void ring_window_load(Window *w) {
 }
 
 static void ring_window_unload(Window *w) {
-  layer_destroy(s_ring_progress);
-  text_layer_destroy(s_ring_hint);
-  text_layer_destroy(s_ring_down);
-  text_layer_destroy(s_ring_up);
-  text_layer_destroy(s_ring_sub);
-  text_layer_destroy(s_ring_time);
+  layer_destroy(s_ring_progress);     s_ring_progress = NULL;
+  text_layer_destroy(s_ring_hint);    s_ring_hint = NULL;
+  text_layer_destroy(s_ring_down);    s_ring_down = NULL;
+  text_layer_destroy(s_ring_up);      s_ring_up = NULL;
+  text_layer_destroy(s_ring_sub);     s_ring_sub = NULL;
+  text_layer_destroy(s_ring_time);    s_ring_time = NULL;
 }
 
 static void ring_minute_tick(struct tm *t, TimeUnits units) {
@@ -623,8 +757,31 @@ static void ring_minute_tick(struct tm *t, TimeUnits units) {
 
 static void start_ring(int slot, bool from_deadline) {
   s_rs.pending_slot = (int8_t)slot;
-  if (s_rs.ring_started_at == 0 || s_rs.snooze_count == 0) {
+  // A fresh deadline always means a fresh ring: reset unconditionally rather
+  // than probing snooze_count/ring_started_at for "does this look fresh",
+  // which is exactly the check that let a day-old snooze_count and
+  // ring_started_at survive an over_cap miss and poison every later alarm
+  // (elapsed = 86400+ s -> immediate over_cap, forever, silently).
+  if (from_deadline) {
+    s_rs.snooze_count = 0;
+    s_rs.ring_started_at = 0;
+  }
+  // Only stamp "now" when there is genuinely nothing to resume: a snooze
+  // expiry (ring_started_at already holds it) or a mid-ring keep-alive
+  // relaunch (ring_started_at already holds the original start) must NOT be
+  // overwritten here, or resuming would restart the ramp at t=0 and quietly
+  // downgrade a long-running alarm back to its gentlest stage.
+  if (s_rs.ring_started_at == 0) {
     s_rs.ring_started_at = (uint32_t)time(NULL);
+  }
+  // The hard alarm time for this ring cycle (RunState's documented meaning),
+  // for Task 11/12 to read. Only stamped on a genuinely fresh deadline, not on
+  // a snooze/keep-alive continuation of the same cycle -- ring_started_at at
+  // this exact point IS "now" whenever from_deadline just reset it above, so
+  // it is also the best available approximation of the actual deadline instant
+  // (accurate to within sc_schedule's +/-2 min E_RANGE shift).
+  if (from_deadline) {
+    s_rs.deadline_at = s_rs.ring_started_at;
   }
   s_rs.window_started_at = 0;
   as_save_runstate(&s_rs);
@@ -656,13 +813,29 @@ static void handle_wakeup_cookie(int32_t cookie) {
   switch (cookie) {
     case WC_DEADLINE:
     case WC_SNOOZE: {
+      if (s_ringing) {
+        // Still ringing: this fired mid-ring -- the periodic keep-alive
+        // itself, or another alarm's deadline coinciding. start_ring's
+        // keep-alive only covers the first SC_REENTRY_GAP_S, so without
+        // re-arming here a kill anywhere past that window loses the alarm
+        // outright, defeating the point of keeping a wakeup live for the
+        // whole ring.
+        sc_schedule(now + SC_REENTRY_GAP_S, WC_SNOOZE);
+        break;
+      }
       int slot = s_rs.pending_slot;
       if (slot < 0) {
         time_t when = 0;
         slot = ac_next_alarm(s_alarms, s_count, now - 120, &when);
       }
-      if (slot < 0) slot = 0;
-      if (!s_ringing) {
+      if (slot < 0 && s_count > 0) {
+        slot = 0;   // last-resort fallback: something to ring beats nothing
+      }
+      // Bounded against s_count (not just >= 0): with s_count == 0 the
+      // fallback above leaves slot at -1, and starting a ring on slot 0 with
+      // no alarms configured would have ring_stop_now later mutate
+      // s_alarms[0] out of range.
+      if (slot >= 0 && slot < s_count) {
         start_ring(slot, cookie == WC_DEADLINE);
       }
       break;

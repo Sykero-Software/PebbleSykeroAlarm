@@ -80,11 +80,12 @@ static time_t prv_next_dst_check(time_t now) {
   return t;
 }
 
-void sc_rearm(const Alarm *alarms, int count, const Config *cfg,
+bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
               const RunState *rs, time_t now) {
   // Cancel-then-reschedule is the only reliable approach: WakeupIds are lost when
   // the app is killed, so there is nothing to selectively cancel after a relaunch.
   sc_cancel_all();
+  bool ok = true;
 
   time_t alarm_when = 0;
   int slot = ac_next_alarm(alarms, count, now, &alarm_when);
@@ -99,7 +100,10 @@ void sc_rearm(const Alarm *alarms, int count, const Config *cfg,
   }
 
   // PRIORITY 2 — snooze expiry, if one is pending. Ahead of the window because a
-  // pending snooze is a promise already made to the user.
+  // pending snooze is a promise already made to the user. This is the one
+  // wakeup this function treats as critical to the caller: ring_snooze_now
+  // (Task 7) relies on sc_rearm to actually schedule it before exiting to the
+  // watchface, so failure here is reported back via the return value.
   //
   // While a snooze is pending, ring_started_at holds the snooze EXPIRY, not the
   // ring start: ring_snooze_now (Task 7) moves it forward so ring_elapsed_s()
@@ -110,7 +114,9 @@ void sc_rearm(const Alarm *alarms, int count, const Config *cfg,
   if (rs->ring_started_at != 0 && rs->snooze_count > 0) {
     time_t snooze_until = (time_t)rs->ring_started_at;
     if (snooze_until > now) {
-      sc_schedule(snooze_until, WC_SNOOZE);
+      if (sc_schedule(snooze_until, WC_SNOOZE) == 0) {
+        ok = false;
+      }
     }
   }
 
@@ -133,4 +139,6 @@ void sc_rearm(const Alarm *alarms, int count, const Config *cfg,
   if (rs->window_started_at != 0) {
     sc_arm_reentry(now);
   }
+
+  return ok;
 }
