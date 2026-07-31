@@ -392,6 +392,47 @@ int main(void) {
     assert(r.fire);
   }
 
+  // --- bridging vs. R alone: the test above does NOT isolate bridging from
+  // SE_WAKE_RUN_MINUTES -- marking every 10th minute invalid across a
+  // 60-minute stretch fragments it into 9-minute pieces, and 9 already
+  // exceeds R=8 on its own, so break-vs-bridge makes no difference at that
+  // fragment size (it only pins the historical bug, R=10 + break, together).
+  // This case is built so bridging is the ONLY thing that matters: six
+  // 4-minute elevated fragments, each individually well below R=8, separated
+  // by all-invalid gaps -- so the scan never sees a valid non-elevated
+  // sample to reset the run on its own. With bridging, the run spans the
+  // whole fragmented region (well over R=8) and is excluded; reverting ONLY
+  // the bridging (break on invalid, R left at 8) makes each 4-minute
+  // fragment evaluate on its own, individually under R=8, so nothing is
+  // excluded and the contamination returns. ---
+  {
+    g_seed = 6;
+    fill_rest(N, 30, 10);
+    int idx = 30;
+    for (int frag = 0; frag < 6; frag++) {
+      for (int k = 0; k < 4; k++) {
+        g_s[idx].vmc = 2500;
+        g_s[idx].is_invalid = false;
+        idx++;
+      }
+      if (frag < 5) {
+        for (int k = 0; k < 3; k++) {
+          g_s[idx].is_invalid = true;
+          idx++;
+        }
+      }
+    }
+    for (int i = WIN + 5; i < WIN + 11; i++) {
+      g_s[i].vmc = 900;
+    }
+    SleepEvalCfg c = cfg_for(95, 2);
+    SleepEvalResult r = se_evaluate(g_s, N, WIN, false, &c);
+    printf("  invalid-bridge-fragments base=%u level=%u fire=%d\n",
+           r.baseline, r.trigger_level, (int)r.fire);
+    assert(r.baseline < 100);
+    assert(r.fire);
+  }
+
   printf("test_sleep_eval: all assertions passed\n");
   return 0;
 }
