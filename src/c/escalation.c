@@ -78,7 +78,6 @@ EscStep esc_step(const EscParams *p, uint32_t elapsed_s, bool sound_available) {
     s.vib_ms = 0;
     s.pulses = 0;
     s.volume = 0;
-    s.light_ms = ESC_LIGHT_MIN_MS;
     return s;
   }
 
@@ -100,13 +99,19 @@ EscStep esc_step(const EscParams *p, uint32_t elapsed_s, bool sound_available) {
     s.volume = (uint8_t)prv_lerp_u32(p->vol_start, p->vol_max, into, p->sound_ramp_s);
   }
 
-  // Burst duration: `pulses` pulses with ESC_INTRA_PULSE_MS between them.
-  uint32_t burst = (uint32_t)s.pulses * s.vib_ms;
-  if (s.pulses > 1) {
-    burst += (uint32_t)(s.pulses - 1) * ESC_INTRA_PULSE_MS;
-  }
-  s.light_ms = burst < ESC_LIGHT_MIN_MS ? ESC_LIGHT_MIN_MS : (uint16_t)burst;
   return s;
+}
+
+void esc_flatten_ramp(EscParams *p) {
+  if (p == NULL) {
+    return;
+  }
+  p->vib_start_ms = p->vib_max_ms;
+  p->pulses_start = p->pulses_max;
+  p->min_gap_s = p->lead_gap_s;
+  // The floor esc_clamp would impose anyway; set it here so esc_full_development_s
+  // is already honest if a caller reads it before clamping.
+  p->tighten_s = 10;
 }
 
 void esc_clamp(EscParams *p) {

@@ -124,6 +124,7 @@ void as_load_config(Config *out) {
     out->light_pulse = true;
     out->dst_check = true;
     out->idle_exit_sec = 15;
+    out->esc_ramp_vib = false;   // explicit: the flattened vibration is the default
   }
   esc_clamp(&out->esc);
 }
@@ -209,13 +210,21 @@ int as_load_nights(NightSummary *out, int max) {
   return n;
 }
 
+// The single funnel every escalation read goes through (the ring loop, the "awake
+// by" pre-roll in scheduler.c, and the Last-night screen), which is why the
+// flatten switch belongs here rather than at each call site. Applies to the Custom
+// profile too -- otherwise the ramp, and its habituation hazard, walks straight
+// back in through Custom.
 void as_effective_esc(const Config *cfg, EscParams *out) {
   if (cfg->wake_profile == ESC_PROFILE_CUSTOM) {
     *out = cfg->esc;
   } else {
     esc_profile(cfg->wake_profile, out);
   }
-  esc_clamp(out);
+  if (!cfg->esc_ramp_vib) {
+    esc_flatten_ramp(out);
+  }
+  esc_clamp(out);   // stays the final gate
 }
 
 void as_effective_sens(const Config *cfg, uint8_t *percentile, uint8_t *minutes) {

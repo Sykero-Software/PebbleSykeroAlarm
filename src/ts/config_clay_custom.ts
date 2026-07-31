@@ -55,6 +55,18 @@ export default function clayConfigCustom(this: any, minified: any): void {
       if (it) { if (profCustom) { it.show(); } else { it.hide(); } }
     }
 
+    // Four of those describe the vibration RAMP only: the gap it tightens to, the
+    // time it tightens over, and the pulse length/count it starts from. With the
+    // ramp off they control nothing, so hide them even in Custom. The remaining
+    // three (esc-lead, esc-vibmax, esc-pmax) are the flat buzz itself.
+    const rampItem = clay.getItemById('esc-ramp');
+    const ramping = rampItem && rampItem.get() === true;
+    const rampOnlyIds = ['esc-min', 'esc-tighten', 'esc-vibstart', 'esc-pstart'];
+    for (let i = 0; i < rampOnlyIds.length; i++) {
+      const it = clay.getItemById(rampOnlyIds[i]);
+      if (it) { if (profCustom && ramping) { it.show(); } else { it.hide(); } }
+    }
+
     // Smart-alarm detail only when the smart alarm is on.
     const smartOn = clay.getItemById('smart-on');
     const smart = smartOn && smartOn.get() === true;
@@ -88,6 +100,10 @@ export default function clayConfigCustom(this: any, minified: any): void {
     const profItem = clay.getItemById('wake-profile');
     if (profItem) {
       profItem.on('change', applyAdvanced);
+    }
+    const rampToggle = clay.getItemById('esc-ramp');
+    if (rampToggle) {
+      rampToggle.on('change', applyAdvanced);
     }
     const smartOnItem = clay.getItemById('smart-on');
     if (smartOnItem) {

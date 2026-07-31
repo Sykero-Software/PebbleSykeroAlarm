@@ -103,9 +103,13 @@ export function buildConfig(): any[] {
   items.push({ type: 'section', items: [
     { type: 'heading', defaultValue: 'How it wakes you' },
     { type: 'text', defaultValue:
-        'Vibration starts gently with long gaps, so there is time to shift '
-      + 'position if you cannot feel it, then tightens. Sound joins later and '
-      + 'gets louder.' },
+        'Vibration buzzes at full strength from the very first buzz, with a '
+      + 'steady gap between buzzes. Sound joins later and gets louder.' },
+    { type: 'toggle', messageKey: 'EscRampVib',
+      label: 'Ramp the vibration up', defaultValue: false, id: 'esc-ramp',
+      description: 'Off is recommended. When on, the vibration starts as a faint '
+                 + 'tap and grows — which can teach you to sleep through it, and '
+                 + 'through the stronger buzzes that follow.' },
     { type: 'select', messageKey: 'WakeProfile', label: 'Wake style',
       defaultValue: '1', id: 'wake-profile',
       options: [
@@ -114,8 +118,13 @@ export function buildConfig(): any[] {
         { label: 'Insistent', value: '2' },
         { label: 'Custom', value: '3' },
       ] },
-    { type: 'slider', messageKey: 'EscLeadGapS', label: 'Custom: first gap (s)',
-      defaultValue: 30, min: 2, max: 120, step: 1, id: 'esc-lead' },
+    // Labels are worded for the ramp-OFF default, where these three ARE the buzz:
+    // lead_gap is the only gap, vib_max the only pulse length, pulses_max the only
+    // count. With the ramp on they become the starting/final ends of it, which the
+    // descriptions say -- the four ramp-only sliders below are hidden when it is off.
+    { type: 'slider', messageKey: 'EscLeadGapS', label: 'Custom: gap between buzzes (s)',
+      defaultValue: 30, min: 2, max: 120, step: 1, id: 'esc-lead',
+      description: 'With the ramp on, this is the first gap only.' },
     { type: 'slider', messageKey: 'EscMinGapS', label: 'Custom: final gap (s)',
       defaultValue: 5, min: 1, max: 60, step: 1, id: 'esc-min' },
     { type: 'slider', messageKey: 'EscTightenS', label: 'Custom: tighten over (s)',
@@ -124,12 +133,14 @@ export function buildConfig(): any[] {
                  + 'that is short.' },
     { type: 'slider', messageKey: 'EscVibStartMs', label: 'Custom: first pulse (ms)',
       defaultValue: 80, min: 40, max: 2000, step: 10, id: 'esc-vibstart' },
-    { type: 'slider', messageKey: 'EscVibMaxMs', label: 'Custom: longest pulse (ms)',
-      defaultValue: 700, min: 40, max: 2000, step: 10, id: 'esc-vibmax' },
+    { type: 'slider', messageKey: 'EscVibMaxMs', label: 'Custom: pulse length (ms)',
+      defaultValue: 700, min: 40, max: 2000, step: 10, id: 'esc-vibmax',
+      description: 'With the ramp on, this is the longest pulse only.' },
     { type: 'slider', messageKey: 'EscPulsesStart', label: 'Custom: first burst pulses',
       defaultValue: 1, min: 1, max: 8, step: 1, id: 'esc-pstart' },
-    { type: 'slider', messageKey: 'EscPulsesMax', label: 'Custom: final burst pulses',
-      defaultValue: 3, min: 1, max: 8, step: 1, id: 'esc-pmax' },
+    { type: 'slider', messageKey: 'EscPulsesMax', label: 'Custom: pulses per buzz',
+      defaultValue: 3, min: 1, max: 8, step: 1, id: 'esc-pmax',
+      description: 'With the ramp on, this is the final count only.' },
     { type: 'slider', messageKey: 'EscSoundAfterS', label: 'Custom: sound joins after (s)',
       defaultValue: 300, min: 1, max: 1800, step: 10, id: 'esc-sndafter',
       description: 'Also bounded by "give up after" below -- reduced to fit if '
@@ -146,7 +157,8 @@ export function buildConfig(): any[] {
       defaultValue: 900, min: 120, max: 3600, step: 30, id: 'esc-cap' },
     { type: 'toggle', messageKey: 'LightPulse', label: 'Light up with each buzz',
       defaultValue: true, id: 'light-pulse',
-      description: 'Only during a buzz, never between them.' },
+      description: 'Lights the screen the way any button press does, for as long '
+                 + 'as your backlight setting says.' },
   ] });
 
   items.push({ type: 'section', items: [

@@ -21,12 +21,16 @@ typedef struct {
 } EscParams;
 
 // What to do for the burst starting at `elapsed_s`.
+//
+// No backlight field: the app asks the system for an interaction-length backlight
+// (light_enable_interaction) rather than holding it for a duration of its own
+// choosing, so the hold time is the user's configured backlight timeout and the
+// system's own ambient/backlight settings apply. See play_burst in main.c.
 typedef struct {
   uint16_t gap_s;      // wait this long after the burst before the next one
   uint16_t vib_ms;     // length of each pulse
   uint8_t  pulses;     // pulses in this burst
   uint8_t  volume;     // 0 == play nothing
-  uint16_t light_ms;   // hold the backlight this long (>= ESC_LIGHT_MIN_MS)
   bool     over_cap;   // true once elapsed_s >= cap_s: make no noise at all
 } EscStep;
 
@@ -37,13 +41,28 @@ typedef struct {
 
 // Silence between the pulses inside one burst.
 #define ESC_INTRA_PULSE_MS    250
-// An 80 ms flash of backlight is imperceptible, so every burst lights the screen
-// for at least this long even when the burst itself is shorter.
-#define ESC_LIGHT_MIN_MS      500
 
 // Fill *out with a built-in profile. ESC_PROFILE_CUSTOM yields the Normal preset
 // as a starting point (the caller overwrites it from persisted settings).
 void esc_profile(uint8_t profile_id, EscParams *out);
+
+// Flatten the VIBRATION escalation: full-strength pulses from the first burst, at
+// a constant gap. The sound stage is deliberately untouched — it still joins at
+// sound_after_s and still ramps vol_start -> vol_max.
+//
+// This is the DEFAULT (config `esc_ramp_vib` off). A vibration that starts below
+// the threshold that wakes a given sleeper trains them to sleep through the
+// channel, which degrades the later strong pulses too — so the alarm must be at
+// full strength from the first buzz, and only its *frequency* varies. The user
+// chose to keep the ramp available rather than delete it (2026-07-31), hence a
+// switch rather than new profile constants.
+//
+// Collapses tighten_s as well, which is not cosmetic: esc_full_development_s
+// feeds the "awake by HH:MM" semantics, so leaving tighten_s at 360-600 s would
+// start the ring minutes earlier than needed for a ramp that no longer exists.
+//
+// Call between esc_profile() and esc_clamp() — esc_clamp must stay the final gate.
+void esc_flatten_ramp(EscParams *p);
 
 // The burst to play at `elapsed_s` seconds into the ring.
 //
@@ -51,7 +70,8 @@ void esc_profile(uint8_t profile_id, EscParams *out);
 // platform without a speaker) the sound stage can never contribute, so the
 // vibration ramp is compressed to reach its maximum at sound_after_s instead of
 // tighten_s and volume stays 0. Without this, a muted user's escalation would
-// silently stop improving halfway.
+// silently stop improving halfway. (Inert after esc_flatten_ramp: every lerped
+// field then has equal endpoints, so compressing the ramp changes nothing.)
 EscStep esc_step(const EscParams *p, uint32_t elapsed_s, bool sound_available);
 
 // Force a parameter set into the ranges the Clay page allows and repair any

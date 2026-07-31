@@ -23,7 +23,13 @@
 
 // Struct versions, bumped when a layout changes so a stale blob is discarded
 // rather than misread.
-#define CONFIG_VERSION    1
+// Bumped 1 -> 2: Config gained esc_ramp_vib. The size check in as_load_config is
+// NOT enough on its own here -- a trailing bool lands in the struct's existing tail
+// padding (alignment 2, from the uint16_t members), so sizeof(Config) is unchanged
+// and a stale v1 blob would pass the length test and be read through the new
+// layout. The version is what discards it; the phone's launch handshake then
+// re-applies the user's real settings.
+#define CONFIG_VERSION    2
 #define RUNSTATE_VERSION  1
 // Bumped 1 -> 2 (Task 12 review): NightSummary gained fired_by_deadline, shifting
 // the byte offsets of alt_percentile/alt_fired_min within the persisted blob. A
@@ -61,6 +67,9 @@ typedef struct {
   bool     light_pulse;
   bool     dst_check;
   uint8_t  idle_exit_sec;          // 0 == off
+  // Off by default: full-strength vibration from the first burst. See
+  // esc_flatten_ramp for why a gentle start is a hazard rather than a courtesy.
+  bool     esc_ramp_vib;
 } Config;
 
 // Live state that must survive the app being killed or the watch rebooting.

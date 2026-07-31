@@ -26,7 +26,6 @@ static void check_invariants(const EscParams *p, bool sound, const char *label) 
     assert(s.vib_ms >= p->vib_start_ms && s.vib_ms <= p->vib_max_ms);
     assert(s.gap_s >= p->min_gap_s && s.gap_s <= p->lead_gap_s);
     assert(s.pulses >= p->pulses_start && s.pulses <= p->pulses_max);
-    assert(s.light_ms >= ESC_LIGHT_MIN_MS);
     if (!sound) {
       assert(s.volume == 0);
     } else {
@@ -78,8 +77,6 @@ int main(void) {
     // t=0 is the gentlest step and is silent
     EscStep s0 = esc_step(&p, 0, true);
     assert(s0.gap_s == 30 && s0.vib_ms == 80 && s0.pulses == 1 && s0.volume == 0);
-    // light is clamped up from the 80 ms burst to the 500 ms minimum
-    assert(s0.light_ms == ESC_LIGHT_MIN_MS);
 
     // just before sound joins: still silent
     assert(esc_step(&p, 299, true).volume == 0);
@@ -89,8 +86,6 @@ int main(void) {
     // at tighten_s the vibration ramp is complete
     EscStep sT = esc_step(&p, p.tighten_s, true);
     assert(sT.vib_ms == 700 && sT.pulses == 3 && sT.gap_s == 5);
-    // and a 3-pulse 700 ms burst gives a light window longer than the minimum
-    assert(sT.light_ms > ESC_LIGHT_MIN_MS);
   }
 
   // --- muted compression: vibration maxes out at sound_after_s, not tighten_s
@@ -179,6 +174,66 @@ int main(void) {
       EscParams q;
       esc_profile(id, &q);
       assert(esc_full_development_s(&q) < q.cap_s);
+    }
+  }
+
+  // --- esc_flatten_ramp: the DEFAULT vibration behaviour. Full strength from the
+  // first buzz at a constant gap, sound ramp untouched. A vibration that starts
+  // below the threshold that wakes a sleeper trains them to sleep through the
+  // channel, so a gentle start is a hazard, not a courtesy.
+  {
+    EscParams p;
+    esc_profile(ESC_PROFILE_NORMAL, &p);
+    esc_flatten_ramp(&p);
+    esc_clamp(&p);   // the real call order in as_effective_esc
+
+    // the ramp ends are collapsed onto the maxima, and the gap no longer tightens
+    assert(p.vib_start_ms == p.vib_max_ms && p.vib_max_ms == 700);
+    assert(p.pulses_start == p.pulses_max && p.pulses_max == 3);
+    assert(p.min_gap_s == p.lead_gap_s && p.lead_gap_s == 30);
+    // the sound stage is deliberately NOT flattened
+    assert(p.sound_after_s == 300 && p.sound_ramp_s == 300);
+    assert(p.vol_start == 15 && p.vol_max == 100);
+
+    // the very first buzz is already the strongest one, and still silent
+    EscStep s0 = esc_step(&p, 0, true);
+    assert(s0.vib_ms == 700 && s0.pulses == 3 && s0.gap_s == 30);
+    assert(s0.volume == 0);
+    // ... and the 3 x 700 ms burst still fits inside the 30 s gap that follows it,
+    // which is the invariant that would break first if the gap had been left to
+    // tighten while the pulses were raised.
+    assert((uint32_t)s0.pulses * s0.vib_ms
+           + (uint32_t)(s0.pulses - 1) * ESC_INTRA_PULSE_MS
+           < (uint32_t)s0.gap_s * 1000);
+
+    // the vibration and the gap are now constant for the whole ring; only volume moves
+    for (uint32_t t = 0; t < p.cap_s; t++) {
+      EscStep s = esc_step(&p, t, true);
+      assert(s.vib_ms == 700 && s.pulses == 3 && s.gap_s == 30);
+    }
+    assert(esc_step(&p, 300, true).volume == 15);
+    assert(esc_step(&p, 600, true).volume == 100);
+
+    // "awake by HH:MM" must no longer reserve time for a ramp that does not exist:
+    // full development is the sound ramp alone (300 + 300), not tighten_s.
+    assert(esc_full_development_s(&p) == 600);
+    EscParams flat_mute;
+    esc_profile(ESC_PROFILE_GENTLE, &flat_mute);
+    esc_flatten_ramp(&flat_mute);
+    esc_clamp(&flat_mute);
+    // Gentle's 600 s tighten_s would otherwise have dominated its 480+300 sound
+    assert(flat_mute.tighten_s < 600);
+    assert(esc_full_development_s(&flat_mute) == 780);
+
+    // every profile still satisfies the full invariant set once flattened
+    const char *flat_names[3] = { "gentle-flat", "normal-flat", "insistent-flat" };
+    for (uint8_t id = 0; id <= 2; id++) {
+      EscParams q;
+      esc_profile(id, &q);
+      esc_flatten_ramp(&q);
+      esc_clamp(&q);
+      check_invariants(&q, true, flat_names[id]);
+      check_invariants(&q, false, flat_names[id]);
     }
   }
 

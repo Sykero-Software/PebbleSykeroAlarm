@@ -53,7 +53,8 @@
       "DstCheck",
       "IdleExitSec",
       "CfgOpen",
-      "CfgRequest"
+      "CfgRequest",
+      "EscRampVib"
     ],
     "resources": {
       "media": [

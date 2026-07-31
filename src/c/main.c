@@ -309,6 +309,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   GET_INT(StopGesture, stop_gesture);
   GET_BOOL(LightPulse, light_pulse);
   GET_BOOL(DstCheck, dst_check);
+  GET_BOOL(EscRampVib, esc_ramp_vib);
   {
     Tuple *iet = dict_find(iter, MESSAGE_KEY_IdleExitSec);
     int isec = idle_read_seconds(iet);
@@ -652,7 +653,13 @@ static void main_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
   switch (ci->row) {
     case MAIN_ROW_ALARMS:     open_alarm_list(); break;
     case MAIN_ROW_LAST_NIGHT: open_last_night(); break;
-    case MAIN_ROW_TEST:       add_test_alarm(); break;
+    // A terminal action, so it leaves for the watchface -- which doubles as the
+    // only confirmation the row has ever given. Safe to exit immediately:
+    // add_test_alarm ends in reload_and_rearm, which persists the alarms and
+    // schedules the wakeup synchronously before returning. The alarm-list toggles
+    // deliberately do NOT do this (the user may want to set two in a row, and idle
+    // auto-exit already gets them out).
+    case MAIN_ROW_TEST:       add_test_alarm(); close_to_watchface(); break;
     default: break;
   }
 }
@@ -688,15 +695,9 @@ static bool sound_available(void) {
 }
 
 static AppTimer *s_burst_timer;
-static AppTimer *s_light_timer;
 
-static void light_off_cb(void *data) {
-  s_light_timer = NULL;
-  light_enable(false);
-}
-
-// Play one escalation burst: `pulses` vibration pulses of `vib_ms`, the backlight
-// held for the burst (min ESC_LIGHT_MIN_MS), and a short tone at `volume`.
+// Play one escalation burst: `pulses` vibration pulses of `vib_ms`, an
+// interaction-length backlight, and a short tone at `volume`.
 static void play_burst(const EscStep *s) {
   // Vibration. Max 8 pulses -> 15 segments (on, off, on, …).
   static uint32_t segs[15];
@@ -712,15 +713,17 @@ static void play_burst(const EscStep *s) {
     vibes_enqueue_custom_pattern(pat);
   }
 
-  // Backlight only for the burst, never between bursts: light_enable_interaction()
-  // would hold it for the system timeout instead, which over a 15 min ring is the
-  // difference between seconds and minutes of backlight.
+  // Ask the system for its normal interaction backlight, rather than forcing the
+  // light on for the burst's own length. Reported from the wrist 2026-07-31: a
+  // burst-length hold (500 ms floor) reads as a strobe, not as the watch lighting
+  // up. light_enable_interaction() holds it for the user's configured backlight
+  // timeout and goes through the system's backlight logic, so the ambient-light
+  // and backlight settings apply -- which light_enable(true) bypasses by forcing.
+  // This deliberately reverses the earlier "seconds not minutes of backlight"
+  // trade: over a long ring the light is now on much of the time. That is the
+  // accepted cost of a light that behaves like every other light on the watch.
   if (s_cfg.light_pulse) {
-    light_enable(true);
-    if (s_light_timer) {
-      app_timer_cancel(s_light_timer);
-    }
-    s_light_timer = app_timer_register(s->light_ms, light_off_cb, NULL);
+    light_enable_interaction();
   }
 
 #ifdef PBL_SPEAKER
@@ -885,10 +888,9 @@ static void burst_cb(void *data) {
 #ifdef PBL_SPEAKER
     speaker_stop();
 #endif
-    if (s_light_timer) { app_timer_cancel(s_light_timer); s_light_timer = NULL; }
-    if (s_cfg.light_pulse) {
-      light_enable(false);
-    }
+    // No backlight teardown: the interaction backlight is the system's to time out,
+    // and forcing it off here would darken the "Alarm missed" screen the user is
+    // meant to read.
     // Clear s_ringing so a LATER wakeup arriving in this same process (another
     // alarm's WC_DEADLINE, or a stray WC_SNOOZE) is not swallowed by the
     // "already ringing" guard in handle_wakeup_cookie -- a missed alarm must
@@ -904,8 +906,8 @@ static void burst_cb(void *data) {
     return;
   }
 
-  APP_LOG(APP_LOG_LEVEL_INFO, "RING t=%lu gap=%d vib=%d x%d vol=%d light=%d",
-          (unsigned long)el, s.gap_s, s.vib_ms, s.pulses, s.volume, s.light_ms);
+  APP_LOG(APP_LOG_LEVEL_INFO, "RING t=%lu gap=%d vib=%d x%d vol=%d",
+          (unsigned long)el, s.gap_s, s.vib_ms, s.pulses, s.volume);
   play_burst(&s);
   schedule_next_burst(s.gap_s);
 }
@@ -913,7 +915,6 @@ static void burst_cb(void *data) {
 static void stop_ring_output(void) {
   s_ringing = false;
   if (s_burst_timer) { app_timer_cancel(s_burst_timer); s_burst_timer = NULL; }
-  if (s_light_timer) { app_timer_cancel(s_light_timer); s_light_timer = NULL; }
   if (s_hold_timer)  { app_timer_cancel(s_hold_timer);  s_hold_timer = NULL; }
   // Without this, pressing DOWN once (showing the hint) then UP within
   // HINT_SHOW_MS leaves hint_hide_cb pending against a TextLayer that
@@ -923,9 +924,8 @@ static void stop_ring_output(void) {
 #ifdef PBL_SPEAKER
   speaker_stop();
 #endif
-  if (s_cfg.light_pulse) {
-    light_enable(false);
-  }
+  // Nothing to undo for the backlight: it is the system's interaction light now,
+  // and it times out on its own.
   // The minute tick is only wanted while the ring is up; leaving it subscribed
   // would have ring_minute_tick write to layers ring_window_unload may since
   // have destroyed, once anything pops the ring window without exiting the
