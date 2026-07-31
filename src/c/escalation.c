@@ -159,3 +159,15 @@ void esc_clamp(EscParams *p) {
     p->sound_after_s = 1;
   }
 }
+
+uint16_t esc_full_development_s(const EscParams *p) {
+  if (p == NULL) {
+    return 0;
+  }
+  uint32_t sound_done = (uint32_t)p->sound_after_s + p->sound_ramp_s;
+  uint32_t full = p->tighten_s > sound_done ? p->tighten_s : sound_done;
+  if (full >= p->cap_s) {
+    full = p->cap_s > 1 ? (uint32_t)(p->cap_s - 1) : 0;
+  }
+  return (uint16_t)full;
+}

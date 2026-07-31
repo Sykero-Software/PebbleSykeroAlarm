@@ -60,3 +60,12 @@ EscStep esc_step(const EscParams *p, uint32_t elapsed_s, bool sound_available);
 // strictly before cap_s. This is what stops a Custom profile from being tuned
 // into something that never wakes anyone.
 void esc_clamp(EscParams *p);
+
+// The point at which the escalation is fully developed: vibration at maximum AND
+// (when audible) volume at maximum. This is what the "awake by HH:MM" time
+// semantics subtracts from the alarm time, so that at HH:MM the alarm has just
+// reached full strength rather than only just started.
+//
+// Note this is deliberately NOT cap_s: cap_s is when the alarm gives up, which
+// would push the ring absurdly early.
+uint16_t esc_full_development_s(const EscParams *p);

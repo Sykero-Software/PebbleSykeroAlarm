@@ -126,6 +126,24 @@ int main(void) {
     check_invariants(&custom, true, "custom-patient");
   }
 
+  // --- esc_full_development_s: when the ramp is completely developed, which is
+  // what the "awake by HH:MM" semantics has to subtract from the alarm time.
+  {
+    EscParams p;
+    esc_profile(ESC_PROFILE_NORMAL, &p);
+    // Normal: tighten 360, sound joins at 300 with a 300 s ramp -> 600 dominates.
+    assert(esc_full_development_s(&p) == 600);
+    EscStep at_full = esc_step(&p, esc_full_development_s(&p), true);
+    assert(at_full.vib_ms == p.vib_max_ms && at_full.pulses == p.pulses_max);
+    assert(at_full.volume == p.vol_max);
+    // never longer than the cap
+    for (uint8_t id = 0; id <= 2; id++) {
+      EscParams q;
+      esc_profile(id, &q);
+      assert(esc_full_development_s(&q) < q.cap_s);
+    }
+  }
+
   printf("test_escalation: all assertions passed\n");
   return 0;
 }
