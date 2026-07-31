@@ -89,12 +89,23 @@ export function buildDict(settings: any): any {
   return dict;
 }
 
+// Pauses/resumes the watch's idle auto-exit around the config page (Task 13):
+// without this, the idle timer could fire while the config webview is open and
+// pop the app's window stack out from under the user, closing the config page
+// on them.
+function sendCfgOpen(open: boolean): void {
+  Pebble.sendAppMessage({ CfgOpen: open ? 1 : 0 },
+    function () {}, function () {});
+}
+
 if (typeof Pebble !== 'undefined') {
   Pebble.addEventListener('showConfiguration', function () {
+    sendCfgOpen(true);
     Pebble.openURL(getClay().generateUrl());
   });
 
   Pebble.addEventListener('webviewclosed', function (e: any) {
+    sendCfgOpen(false);
     if (!e || !e.response) {
       return;
     }
