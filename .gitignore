@@ -24,3 +24,6 @@ Releases/
 # OS cruft
 .DS_Store
 ._*
+
+# Phone-side JS is generated from src/ts/ by tsc (see wscript compile_typescript).
+/src/pkjs/*.js
