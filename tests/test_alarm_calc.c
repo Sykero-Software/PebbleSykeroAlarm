@@ -48,6 +48,39 @@ int main(void) {
   Alarm daily = { .minute_of_day = 6 * 60, .weekday_mask = 0x7F, .enabled = true };
   assert(ac_next_occurrence(&daily, at(2026, 12, 31, 7, 0)) == at(2027, 1, 1, 6, 0));
 
+  // --- The wall-clock invariant: whatever an occurrence resolves to, its LOCAL time
+  // must BE the alarm's time. This is what the diorite emulator violated on
+  // 2026-08-01, by exactly one hour, in every row -- an 08:30 alarm read "in 9 h" at
+  // 00:16 and a one-time 00:10 alarm read "in 54 min" instead of "in 23 h", so it
+  // never fired. The cause was tm_isdst = -1 not being honoured by the platform's
+  // mktime, which prv_occurrence_on now verifies and corrects. Asserted here across a
+  // whole year (both DST boundaries and every weekday pattern) rather than for one
+  // date, because the failure was uniform and a single-date check happened to pass.
+  {
+    const uint16_t minutes[5] = { 0, 10, 7 * 60, 8 * 60 + 30, 23 * 60 + 59 };
+    const uint8_t masks[4] = { 0x00, 0x1F, 0x60, 0x7F };   // once, Mon-Fri, weekend, daily
+    int checked = 0;
+    for (int mi = 0; mi < 5; mi++) {
+      for (int wi = 0; wi < 4; wi++) {
+        Alarm a = { .minute_of_day = minutes[mi], .weekday_mask = masks[wi],
+                    .enabled = true, .skip_next = false };
+        for (int day = 0; day < 365; day += 7) {
+          time_t from = at(2026, 8, 1, 12, 0) + (time_t)day * 86400;
+          time_t next = ac_next_occurrence(&a, from);
+          assert(next > from);
+          struct tm *tm = localtime(&next);
+          assert(tm->tm_hour * 60 + tm->tm_min == (int)a.minute_of_day);
+          if (a.weekday_mask != 0) {
+            assert((a.weekday_mask & (1 << ((tm->tm_wday + 6) % 7))) != 0);
+          }
+          checked++;
+        }
+      }
+    }
+    printf("  wall-clock invariant held for %d occurrences\n", checked);
+    assert(checked == 5 * 4 * 53);
+  }
+
   // --- DST: Europe/Helsinki springs forward 2027-03-28 (between 02:00 and 03:00).
   // A 07:00 alarm must stay at wall-clock 07:00, i.e. 22h after Sat 08:00,
   // not 24h. Adding 86400 naively would land at 08:00.

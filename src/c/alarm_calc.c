@@ -16,8 +16,40 @@ static time_t prv_occurrence_on(time_t now, int day_offset, uint16_t minute_of_d
   tm.tm_hour = minute_of_day / 60;
   tm.tm_min = minute_of_day % 60;
   tm.tm_sec = 0;
-  tm.tm_isdst = -1;   // let mktime resolve DST for the target date
-  return mktime(&tm);
+  tm.tm_isdst = -1;   // ask mktime to resolve DST for the target date
+  time_t t = mktime(&tm);
+
+  // Verify the round trip, because tm_isdst = -1 is NOT reliably honoured.
+  //
+  // Observed on the diorite emulator 2026-08-01: every occurrence came out exactly
+  // one hour late -- an 08:30 alarm read "in 9 h" at 00:16, and a one-time 00:10
+  // alarm that should have been 23 h away read "in 54 min" (i.e. 01:10), so it also
+  // failed to fire. The same code over glibc computes correctly, so the algorithm is
+  // right and it is the platform's localtime/mktime pair that disagrees: fields
+  // produced by a summer-time localtime were re-interpreted by mktime as standard
+  // time. EEST vs EET is exactly the one hour seen.
+  //
+  // So do not trust it: ask what wall-clock time `t` actually is, and if it is not
+  // the one requested, shift by the difference. The correction is applied ONLY when
+  // it demonstrably lands on the requested time, which makes this a provable no-op
+  // on a platform that already round-trips correctly, and keeps it from oscillating
+  // on a local time that genuinely does not exist (the spring-forward gap, where
+  // mktime's normalization to the following hour is the correct answer and must be
+  // left alone).
+  struct tm back = *localtime(&t);
+  const int want = (int)minute_of_day;
+  const int got = back.tm_hour * 60 + back.tm_min;
+  if (got != want) {
+    const int diff = got - want;              // minutes the platform overshot by
+    if (diff > -720 && diff < 720) {          // sub-half-day only
+      const time_t adj = t - (time_t)diff * 60;
+      struct tm chk = *localtime(&adj);
+      if (chk.tm_hour * 60 + chk.tm_min == want) {
+        t = adj;
+      }
+    }
+  }
+  return t;
 }
 
 // n-th (1-based) occurrence strictly after `now`.
