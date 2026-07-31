@@ -3,7 +3,20 @@
 #define ALARM_CALC_H
 #include <stdbool.h>
 #include <stdint.h>
+
+// The one platform seam in this otherwise pure module. The Pebble SDK ships no
+// <time.h>: it declares struct tm, localtime and mktime in pebble.h itself
+// (sdk-core/pebble/<board>/include/pebble.h), and the arm toolchain's own
+// <time.h> leaves struct tm incomplete — so a watch build that includes only
+// <time.h> fails with "variable 'tm' has initializer but incomplete type" and
+// implicit declarations of localtime/mktime. On the host, <time.h> is exactly
+// right. Keeping the conditional HERE means alarm_calc.c and every host test
+// stay free of platform #ifdefs.
+#ifdef __ARM_EABI__
+#include <pebble.h>
+#else
 #include <time.h>
+#endif
 
 #define MAX_ALARMS 8
 

@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-#ifdef __ARM_EABI__
-#include <pebble.h>
-#endif
 #include <stddef.h>
-#include <time.h>
 #include "alarm_calc.h"
 
 // Convert tm_wday (0=Sunday) to our bit index (0=Monday).
