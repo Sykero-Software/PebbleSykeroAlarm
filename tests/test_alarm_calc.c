@@ -123,6 +123,9 @@ int main(void) {
   // one-time slot: an all-zero weekday field
   n = ac_parse_set("05:15|0000000", parsed, MAX_ALARMS);
   assert(n == 1 && parsed[0].weekday_mask == 0x00 && parsed[0].minute_of_day == 315);
+  // out-of-range fields are rejected, not wrapped
+  assert(ac_parse_set("25:00|1111111", parsed, MAX_ALARMS) == 0);
+  assert(ac_parse_set("07:75|1111111", parsed, MAX_ALARMS) == 0);
 
   printf("test_alarm_calc: all assertions passed\n");
   return 0;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-#pragma once
+#ifndef ALARM_CALC_H
+#define ALARM_CALC_H
 #include <stdbool.h>
 #include <stdint.h>
 #include <time.h>
@@ -20,8 +21,9 @@ typedef struct {
 // Returns 0 if it never fires (disabled).
 //
 // Computed via localtime/mktime rather than by adding multiples of 86400, so a
-// 07:00 alarm stays at wall-clock 07:00 across a DST transition (the gap becomes
-// 23 h or 25 h, which is the correct behaviour for an alarm clock).
+// 07:00 alarm stays at wall-clock 07:00 across a DST transition: the real time
+// that elapses is an hour shorter (spring) or longer (autumn) than the wall-clock
+// difference, which is the correct behaviour for an alarm clock.
 time_t ac_next_occurrence(const Alarm *a, time_t now);
 
 // Index of the alarm that fires soonest, or -1 if none will. On success writes
@@ -37,3 +39,5 @@ int ac_next_alarm(const Alarm *alarms, int count, time_t now, time_t *out_when);
 // Hand-rolled digit parsing on purpose: atoi/strtol are not exported by the
 // Core Devices firmware and hard-fault on hardware.
 int ac_parse_set(const char *s, Alarm *out, int max);
+
+#endif
