@@ -107,6 +107,15 @@ bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
       // when the awake-by lead time does not fit before it. alarm_when is
       // always > now here (ac_next_alarm only ever returns future
       // occurrences), so this fallback is always schedulable.
+      //
+      // Accepted residual race, not eliminated: ac_next_alarm/prv_nth_occurrence
+      // only guarantees alarm_when > the `now` THIS function was called with. An
+      // occurrence as little as a second out could still tick into the past by
+      // the time sc_schedule below re-reads time(NULL) itself. We do not chase
+      // that race here -- sc_schedule's own already-past guard now LOGS the
+      // decline instead of failing silently (see its own comment), which is
+      // what makes this an acceptable, visible edge case rather than a repeat
+      // of the bug this fallback exists to fix.
       APP_LOG(APP_LOG_LEVEL_INFO,
               "ring deadline for slot %d already past (ring=%lu <= now=%lu) -- "
               "falling back to ringing at the alarm time",

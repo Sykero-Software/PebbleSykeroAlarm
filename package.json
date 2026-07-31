@@ -40,6 +40,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "pretest": "tsc",
-    "test": "node --test tests/*.test.js"
+    "test": "node --test tests/*.test.js && npm run test:c",
+    "test:c": "bash tests/run_c_tests.sh"
   }
 }

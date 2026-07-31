@@ -1,4 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
+//
+// CONTRACT WITH THE WATCH: the packed strings this file asserts (leading '-'
+// = disabled, "HH:MM|DDDDDDD" with bit0 = Monday) are the exact wire format
+// `ac_parse_set` in src/c/alarm_calc.c parses. tests/test_pack_contract.c
+// re-parses several of these SAME literal strings through the real C parser
+// and asserts the resulting Alarm fields, so the two sides cannot silently
+// drift apart. If you change what this file asserts a packed string looks
+// like, update tests/test_pack_contract.c's literals to match (and vice
+// versa) -- see that file's own header comment.
 const test = require('node:test');
 const assert = require('node:assert');
 const { packAlarmSet, unpackAlarmSet, SLOT_COUNT } = require('../src/pkjs/alarm_pack.js');
@@ -59,6 +68,34 @@ test('truncates to SLOT_COUNT slots', () => {
     many.push({ enabled: true, time: '0' + (i % 10) + ':00', days: D('1111111') });
   }
   assert.strictEqual(packAlarmSet(many).split(';').length, SLOT_COUNT);
+});
+
+test('an empty slot list packs to the empty string (the watch clears all alarms)', () => {
+  assert.strictEqual(packAlarmSet([]), '');
+});
+
+test('round-trips all SLOT_COUNT (8) slots by content, not just the truncated count', () => {
+  // Exactly 8 slots, alternating enabled/disabled and weekday/one-time -- this
+  // exercises every field combination at the real SLOT_COUNT boundary, not
+  // just the count assertion 'truncates to SLOT_COUNT slots' above makes.
+  // The packed literal below is also asserted against the real ac_parse_set
+  // in tests/test_pack_contract.c (search that file for this exact string).
+  const slots = [];
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    slots.push({
+      enabled: i % 2 === 0,
+      time: '0' + i + ':00',
+      days: i % 2 === 0 ? D('1111100') : D('0000000'),
+    });
+  }
+  const packed = packAlarmSet(slots);
+  assert.strictEqual(packed,
+    '00:00|1111100;-01:00|0000000;02:00|1111100;-03:00|0000000;'
+    + '04:00|1111100;-05:00|0000000;06:00|1111100;-07:00|0000000');
+  const round = unpackAlarmSet(packed);
+  assert.strictEqual(round.length, SLOT_COUNT);
+  assert.deepStrictEqual(round, slots);
+  assert.strictEqual(packAlarmSet(round), packed);
 });
 
 test('round-trips through unpackAlarmSet', () => {

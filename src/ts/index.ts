@@ -20,9 +20,14 @@ function slotsFromSettings(settings: any): SlotFields[] {
   const out: SlotFields[] = [];
   for (let i = 1; i <= SLOT_COUNT; i++) {
     const days = val(settings, 'Slot' + i + 'Days');
+    const time = val(settings, 'Slot' + i + 'Time');
     out.push({
       enabled: val(settings, 'Slot' + i + 'On') === true,
-      time: (val(settings, 'Slot' + i + 'Time') || '') as string,
+      // Guarded the same way as `days` below: an unexpected non-string value
+      // (Clay is expected to hand back a DOM input value, i.e. always a
+      // string, but nothing enforces that at this boundary) falls back to ''
+      // rather than being blindly cast.
+      time: typeof time === 'string' ? time : '',
       days: Array.isArray(days) ? (days as boolean[]) : [],
     });
   }
