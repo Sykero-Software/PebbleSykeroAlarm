@@ -79,7 +79,21 @@ static void reload_and_rearm(void) {
   refresh_list();
 }
 
-// --- Phone config (Clay): the AlarmSet inbox message. ---
+// --- Phone config (Clay): AlarmSet plus every other setting. ---
+
+// __typeof__ (not the brief's bare `typeof`): the Pebble SDK builds with
+// -std=c99 (strict ISO, no GNU keyword extensions), under which bare `typeof`
+// does not exist and fails with "implicit declaration of function 'typeof'"
+// -- confirmed by `pebble build`. __typeof__ is GCC's always-available,
+// reserved-namespace spelling of the same extension, unaffected by -std=c99.
+#define GET_INT(key, field) do { \
+    Tuple *tt = dict_find(iter, MESSAGE_KEY_##key); \
+    if (tt) { s_cfg.field = (__typeof__(s_cfg.field))tt->value->int32; changed = true; } \
+  } while (0)
+#define GET_BOOL(key, field) do { \
+    Tuple *tt = dict_find(iter, MESSAGE_KEY_##key); \
+    if (tt) { s_cfg.field = tt->value->int32 != 0; changed = true; } \
+  } while (0)
 
 static void inbox_received(DictionaryIterator *iter, void *context) {
   Tuple *t = dict_find(iter, MESSAGE_KEY_AlarmSet);
@@ -93,6 +107,41 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
     int parsed = ac_parse_set(buf, s_alarms, MAX_ALARMS);
     s_count = parsed;
     APP_LOG(APP_LOG_LEVEL_INFO, "CFG AlarmSet='%s' -> %d alarms", buf, parsed);
+    reload_and_rearm();
+  }
+
+  bool changed = false;
+  GET_BOOL(SmartEnabled, smart_enabled);
+  GET_INT(SmartWindowMin, smart_window_min);
+  GET_INT(TimeSemantics, time_semantics);
+  GET_INT(Sensitivity, sensitivity);
+  GET_INT(SensPercentile, sens_percentile);
+  GET_INT(SensMinutes, sens_minutes);
+  GET_INT(WakeProfile, wake_profile);
+  GET_INT(EscLeadGapS, esc.lead_gap_s);
+  GET_INT(EscMinGapS, esc.min_gap_s);
+  GET_INT(EscTightenS, esc.tighten_s);
+  GET_INT(EscVibStartMs, esc.vib_start_ms);
+  GET_INT(EscVibMaxMs, esc.vib_max_ms);
+  GET_INT(EscPulsesStart, esc.pulses_start);
+  GET_INT(EscPulsesMax, esc.pulses_max);
+  GET_INT(EscSoundAfterS, esc.sound_after_s);
+  GET_INT(EscSoundRampS, esc.sound_ramp_s);
+  GET_INT(EscVolStart, esc.vol_start);
+  GET_INT(EscVolMax, esc.vol_max);
+  GET_INT(EscCapS, esc.cap_s);
+  GET_INT(SnoozeMin, snooze_min);
+  GET_INT(SnoozeMax, snooze_max);
+  GET_INT(SnoozeRampOffsetS, snooze_ramp_offset_s);
+  GET_INT(StopGesture, stop_gesture);
+  GET_BOOL(LightPulse, light_pulse);
+  GET_BOOL(DstCheck, dst_check);
+  GET_INT(IdleExitSec, idle_exit_sec);
+  if (changed) {
+    as_save_config(&s_cfg);   // esc_clamp runs inside as_save_config
+    APP_LOG(APP_LOG_LEVEL_INFO, "CFG updated: smart=%d win=%d sens=%d prof=%d gest=%d",
+            (int)s_cfg.smart_enabled, s_cfg.smart_window_min, s_cfg.sensitivity,
+            s_cfg.wake_profile, s_cfg.stop_gesture);
     reload_and_rearm();
   }
 }

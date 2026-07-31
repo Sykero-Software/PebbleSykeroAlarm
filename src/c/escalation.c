@@ -158,6 +158,51 @@ void esc_clamp(EscParams *p) {
   if (p->sound_after_s == 0) {
     p->sound_after_s = 1;
   }
+
+  // Burst duration must stay strictly under the gap that follows it, at every
+  // point along the ramp. vib_ms/pulses only ever grow toward vib_max_ms/
+  // pulses_max while gap_s only ever shrinks toward min_gap_s (esc_step lerps
+  // all three from the same fraction), so checking the worst case -- the
+  // longest possible burst against the shortest possible gap -- is enough for
+  // the whole ramp. Without this, per-field ranges alone permit e.g.
+  // pulses_max=8, vib_max_ms=2000, min_gap_s=1: an 8*2000 + 7*250 = 17750 ms
+  // burst repeated every 1000 ms, which piles up in the vibe queue as
+  // continuous vibration instead of a burst-and-pause pattern.
+  //
+  // Shrink the burst side first (fewer pulses, then a shorter longest pulse)
+  // rather than widening the gap, since that is the gentler edit and is what
+  // the user actually asked for with pulses_max/vib_max_ms; only fall back to
+  // widening min_gap_s (and lead_gap_s along with it, so lead_gap_s >=
+  // min_gap_s stays true) if the burst side has nothing left to give. The loop
+  // is bounded: pulses_max can fall at most 7 times and vib_max_ms at most
+  // ~196 times (step 10, from 2000 down to 40) before the burst side alone
+  // (1 pulse, 40 ms) is already under any min_gap_s >= 1 s, so the fallback
+  // branch is unreachable in practice; the iteration cap is defensive only.
+  for (int iter = 0; iter < 256; iter++) {
+    uint32_t burst_max_ms = (uint32_t)p->pulses_max * p->vib_max_ms;
+    if (p->pulses_max > 1) {
+      burst_max_ms += (uint32_t)(p->pulses_max - 1) * ESC_INTRA_PULSE_MS;
+    }
+    if (burst_max_ms < (uint32_t)p->min_gap_s * 1000) {
+      break;
+    }
+    if (p->pulses_max > 1) {
+      p->pulses_max--;
+      if (p->pulses_max < p->pulses_start) {
+        p->pulses_start = p->pulses_max;
+      }
+    } else if (p->vib_max_ms > 40) {
+      p->vib_max_ms = (p->vib_max_ms > 50) ? (uint16_t)(p->vib_max_ms - 10) : 40;
+      if (p->vib_max_ms < p->vib_start_ms) {
+        p->vib_start_ms = p->vib_max_ms;
+      }
+    } else {
+      p->min_gap_s++;
+      if (p->min_gap_s > p->lead_gap_s) {
+        p->lead_gap_s = p->min_gap_s;
+      }
+    }
+  }
 }
 
 uint16_t esc_full_development_s(const EscParams *p) {

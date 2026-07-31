@@ -6,6 +6,9 @@
 // The invariant that prevents a Custom profile from never waking anyone:
 // vibration must reach its maximum, and (when sound is available) volume must
 // reach its maximum, strictly before cap_s. Monotonic in elapsed throughout.
+// Also: the burst just played must be strictly shorter than the gap that
+// follows it -- otherwise bursts pile up in the vibe queue as continuous
+// vibration instead of a burst-and-pause pattern (esc_clamp's job to prevent).
 static void check_invariants(const EscParams *p, bool sound, const char *label) {
   uint16_t prev_vib = 0, prev_gap = 0xFFFF;
   uint8_t prev_pulses = 0, prev_vol = 0;
@@ -29,6 +32,13 @@ static void check_invariants(const EscParams *p, bool sound, const char *label) 
     } else {
       assert(s.volume <= p->vol_max);
     }
+    // burst duration (pulses * vib_ms, plus the intra-pulse silences) must
+    // stay strictly under the gap that follows -- see esc_clamp.
+    uint32_t burst_ms = (uint32_t)s.pulses * s.vib_ms;
+    if (s.pulses > 1) {
+      burst_ms += (uint32_t)(s.pulses - 1) * ESC_INTRA_PULSE_MS;
+    }
+    assert(burst_ms < (uint32_t)s.gap_s * 1000);
     if (s.vib_ms == p->vib_max_ms && s.pulses == p->pulses_max) hit_vib_max = true;
     if (sound && s.volume == p->vol_max) hit_vol_max = true;
     prev_vib = s.vib_ms; prev_gap = s.gap_s;
@@ -110,6 +120,34 @@ int main(void) {
     esc_clamp(&bad);
     check_invariants(&bad, true, "clamped-hostile");
     check_invariants(&bad, false, "clamped-hostile");
+  }
+
+  // --- esc_clamp closes the burst-vs-gap hole: every FIELD individually
+  // within its Clay-allowed range (pulses_max<=8, vib_max_ms<=2000,
+  // min_gap_s>=1) can still combine into a burst longer than the gap after
+  // it. Task 9 review's example: pulses_max=8, vib_max_ms=2000, min_gap_s=1 ->
+  // an (8*2000 + 7*250) = 17750 ms burst repeated every 1000 ms, which piles
+  // up as continuous vibration instead of burst-and-pause.
+  {
+    EscParams hostile_gap = {
+      .lead_gap_s = 10, .min_gap_s = 1, .tighten_s = 60,
+      .vib_start_ms = 2000, .vib_max_ms = 2000,
+      .pulses_start = 8, .pulses_max = 8,
+      .sound_after_s = 30, .sound_ramp_s = 20,
+      .vol_start = 50, .vol_max = 100,
+      .cap_s = 200,
+    };
+    // Individually every field above is inside the range esc_clamp/the Clay
+    // sliders allow, so a plain per-field clamp would leave it untouched.
+    esc_clamp(&hostile_gap);
+    assert(hostile_gap.min_gap_s == 1);   // untouched: per-field value was legal
+    uint32_t burst_max_ms = (uint32_t)hostile_gap.pulses_max * hostile_gap.vib_max_ms;
+    if (hostile_gap.pulses_max > 1) {
+      burst_max_ms += (uint32_t)(hostile_gap.pulses_max - 1) * ESC_INTRA_PULSE_MS;
+    }
+    assert(burst_max_ms < (uint32_t)hostile_gap.min_gap_s * 1000);
+    check_invariants(&hostile_gap, true, "hostile-burst-vs-gap");
+    check_invariants(&hostile_gap, false, "hostile-burst-vs-gap");
   }
 
   // --- a legitimate Custom profile: very patient, sound late

@@ -58,7 +58,10 @@ EscStep esc_step(const EscParams *p, uint32_t elapsed_s, bool sound_available);
 // inversion (min > max, zero durations). After esc_clamp, esc_step is guaranteed
 // to reach maximum vibration — and maximum volume when sound is available —
 // strictly before cap_s. This is what stops a Custom profile from being tuned
-// into something that never wakes anyone.
+// into something that never wakes anyone. It also guarantees the longest
+// possible burst (pulses_max pulses at vib_max_ms) is strictly shorter than the
+// shortest possible gap (min_gap_s), so a Custom profile cannot be tuned into
+// back-to-back bursts that pile up in the vibe queue as continuous vibration.
 void esc_clamp(EscParams *p);
 
 // The point at which the escalation is fully developed: vibration at maximum AND

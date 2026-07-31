@@ -4,8 +4,23 @@ import { buildConfig } from './config_clay';
 import clayConfigCustom from './config_clay_custom';
 
 declare const require: any;
-const Clay = require('pebble-clay');
-const clay = new Clay(buildConfig(), clayConfigCustom, { autoHandleEvents: false });
+
+// Clay itself is only requireable inside the pebble-tool build (its config
+// webview HTML + the generated `message_keys` module do not exist under a
+// plain `node --test`), and `Pebble` is a runtime global the phone provides,
+// not one Node has. Both are deferred behind getClay()/the typeof guard below
+// so this file's pure exports (buildDict, NUMERIC_KEYS, BOOL_KEYS) can be
+// `require`d directly by tests/config_clay.test.js without ever touching
+// either — on the real watch `Pebble` is always defined by the time this
+// bundle runs, so the guard is a no-op there and behaviour is unchanged.
+let clayInstance: any = null;
+function getClay(): any {
+  if (!clayInstance) {
+    const Clay = require('pebble-clay');
+    clayInstance = new Clay(buildConfig(), clayConfigCustom, { autoHandleEvents: false });
+  }
+  return clayInstance;
+}
 
 // Clay returns getSettings(resp, false) in its unflattened {key:{value:X}} form.
 function val(settings: any, key: string): any {
@@ -34,23 +49,64 @@ function slotsFromSettings(settings: any): SlotFields[] {
   return out;
 }
 
-Pebble.addEventListener('showConfiguration', function () {
-  Pebble.openURL(clay.generateUrl());
-});
+// Clay returns select/slider/radiogroup/input values as DOM STRINGS. The watch
+// reads ints (value->int32), so every numeric key must be parseInt'ed before
+// sendAppMessage or the watch reads garbage.
+export const NUMERIC_KEYS = [
+  'SmartWindowMin', 'TimeSemantics', 'Sensitivity', 'SensPercentile', 'SensMinutes',
+  'WakeProfile',
+  'EscLeadGapS', 'EscMinGapS', 'EscTightenS', 'EscVibStartMs', 'EscVibMaxMs',
+  'EscPulsesStart', 'EscPulsesMax', 'EscSoundAfterS', 'EscSoundRampS',
+  'EscVolStart', 'EscVolMax', 'EscCapS',
+  'SnoozeMin', 'SnoozeMax', 'SnoozeRampOffsetS',
+  'StopGesture', 'IdleExitSec',
+];
 
-Pebble.addEventListener('webviewclosed', function (e: any) {
-  if (!e || !e.response) {
-    return;
-  }
-  const settings = clay.getSettings(e.response, false);
+export const BOOL_KEYS = ['SmartEnabled', 'LightPulse', 'DstCheck'];
+
+export function buildDict(settings: any): any {
   const dict: any = {};
   dict.AlarmSet = packAlarmSet(slotsFromSettings(settings));
-  console.log('SmartAlarm: sending AlarmSet=' + dict.AlarmSet);
-  Pebble.sendAppMessage(dict,
-    function () { console.log('SmartAlarm: settings delivered'); },
-    function (err: any) { console.log('SmartAlarm: send failed ' + JSON.stringify(err)); });
-});
+  for (let i = 0; i < NUMERIC_KEYS.length; i++) {
+    const k = NUMERIC_KEYS[i];
+    const v = val(settings, k);
+    if (v === undefined || v === null || v === '') {
+      continue;
+    }
+    const n = parseInt(String(v), 10);
+    if (!isNaN(n)) {
+      dict[k] = n;
+    }
+  }
+  for (let i = 0; i < BOOL_KEYS.length; i++) {
+    const k = BOOL_KEYS[i];
+    const v = val(settings, k);
+    if (v === undefined || v === null) {
+      continue;
+    }
+    dict[k] = v === true || v === 'true' || v === 1 ? 1 : 0;
+  }
+  return dict;
+}
 
-Pebble.addEventListener('ready', function () {
-  console.log('SmartAlarm PKJS ready');
-});
+if (typeof Pebble !== 'undefined') {
+  Pebble.addEventListener('showConfiguration', function () {
+    Pebble.openURL(getClay().generateUrl());
+  });
+
+  Pebble.addEventListener('webviewclosed', function (e: any) {
+    if (!e || !e.response) {
+      return;
+    }
+    const settings = getClay().getSettings(e.response, false);
+    const dict = buildDict(settings);
+    console.log('SmartAlarm: sending AlarmSet=' + dict.AlarmSet);
+    Pebble.sendAppMessage(dict,
+      function () { console.log('SmartAlarm: settings delivered'); },
+      function (err: any) { console.log('SmartAlarm: send failed ' + JSON.stringify(err)); });
+  });
+
+  Pebble.addEventListener('ready', function () {
+    console.log('SmartAlarm PKJS ready');
+  });
+}
