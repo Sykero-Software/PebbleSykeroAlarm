@@ -144,8 +144,63 @@ static void refresh_list(void) {
 static void reload_and_rearm(void) {
   as_save_alarms(s_alarms, s_count);
   as_save_runstate(&s_rs);
-  sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL));
+  sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL), s_ringing);
   refresh_list();
+}
+
+// --- The RunState alarm CYCLE: the single owner of the five fields that
+// describe "the alarm we are currently dealing with".
+//
+// pending_slot, window_started_at, deadline_at, ring_started_at and snooze_count
+// are one unit: they are meaningful only together, for the span from a smart
+// window opening (or a deadline ringing) until the ring is dismissed. Four call
+// sites used to set or clear four DIFFERENT subsets of them by hand, and that
+// asymmetry -- not a single missing line -- is what produced the whole-branch
+// review's Critical 1: deadline_at was written by two paths (start_ring and
+// open_smart_window) and cleared by NONE, so after the very first ring it held
+// yesterday's ring instant forever. The next night's WC_WINDOW then read a
+// deadline ~24 h in the past, concluded the deadline had passed, and rang
+// immediately AT WINDOW START -- up to 60 minutes early, with the smart window
+// never opening again, and record_night reporting "smart alarm unavailable".
+// The README's own "Test alarm in 2 min" validation step was enough to poison
+// the state before the user's first real night.
+//
+// So: every mutation of the cycle goes through this pair. Nothing else may
+// assign these five fields, except ring_snooze_now's deliberate move of
+// ring_started_at/snooze_count WITHIN a live cycle (a snooze continues the
+// cycle, it does not begin or end one).
+static void runstate_end_cycle(void) {
+  APP_LOG(APP_LOG_LEVEL_INFO,
+          "CYCLE end (was slot=%d window=%lu deadline=%lu ring=%lu snooze=%d)",
+          (int)s_rs.pending_slot, (unsigned long)s_rs.window_started_at,
+          (unsigned long)s_rs.deadline_at, (unsigned long)s_rs.ring_started_at,
+          s_rs.snooze_count);
+  s_rs.pending_slot = -1;
+  s_rs.window_started_at = 0;
+  s_rs.deadline_at = 0;
+  s_rs.ring_started_at = 0;
+  s_rs.snooze_count = 0;
+}
+
+// Begin (or continue) the cycle for `slot`. `window_start` is 0 when no smart
+// window is open (a ring has none). `deadline` is the hard alarm instant for
+// this cycle. `fresh` distinguishes a brand-new cycle -- whose ring/snooze
+// bookkeeping must start from zero -- from a continuation of the same cycle (a
+// snooze expiry, or a mid-ring keep-alive relaunch), which must keep the
+// original ring start so the escalation ramp resumes where it left off instead
+// of quietly restarting at its gentlest stage.
+static void runstate_begin_cycle(int slot, time_t window_start, time_t deadline,
+                                 bool fresh) {
+  s_rs.pending_slot = (int8_t)slot;
+  s_rs.window_started_at = (uint32_t)window_start;
+  s_rs.deadline_at = (uint32_t)deadline;
+  if (fresh) {
+    s_rs.ring_started_at = 0;
+    s_rs.snooze_count = 0;
+  }
+  APP_LOG(APP_LOG_LEVEL_INFO,
+          "CYCLE begin slot=%d window=%lu deadline=%lu fresh=%d",
+          slot, (unsigned long)window_start, (unsigned long)deadline, (int)fresh);
 }
 
 // --- Phone config (Clay): AlarmSet plus every other setting. ---
@@ -253,9 +308,38 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   }
 }
 
+// Outbox result handlers. These MUST be registered before anything is sent: on
+// hardware the phone ACKs an outbound message and the SDK invokes the result
+// callback, and a NULL callback jumps to a null address and faults. (The
+// emulator never hits this -- there is no phone to ACK.)
 static void outbox_sent(DictionaryIterator *iter, void *context) {}
 static void outbox_failed(DictionaryIterator *iter, AppMessageResult r, void *context) {
   APP_LOG(APP_LOG_LEVEL_ERROR, "outbox failed: %d", (int)r);
+}
+
+// Ask the phone for the config it last saved.
+//
+// THE ALARM TIMES LIVE ONLY ON THE PHONE and there is no on-watch editing by
+// design, so config delivery has to be reliable -- and `webviewclosed` ->
+// sendAppMessage, the only path there was, lands ONLY if this watchapp happened
+// to be running at the moment the user hit Save. A watchapp normally is not.
+// The user set 06:45, saw no error, and the watch went on ringing at the seeded
+// demo 07:00: silent, and indistinguishable from working (the whole-branch
+// review's Critical 2). So on every launch we ask, and the phone replies with
+// the dict it persisted on its last Save (src/ts/config_sync.ts) -- exactly the
+// handshake PebbleCountdownTimer already uses. The phone stays SILENT when
+// nothing was ever saved, so the watch's own persisted state is never clobbered
+// by an empty reply.
+static void request_config(void) {
+  DictionaryIterator *out;
+  AppMessageResult r = app_message_outbox_begin(&out);
+  if (r != APP_MSG_OK) {
+    APP_LOG(APP_LOG_LEVEL_ERROR, "CfgRequest: outbox_begin failed: %d", (int)r);
+    return;
+  }
+  dict_write_uint8(out, MESSAGE_KEY_CfgRequest, 1);
+  app_message_outbox_send();
+  APP_LOG(APP_LOG_LEVEL_INFO, "CfgRequest sent");
 }
 
 static uint16_t list_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
@@ -842,10 +926,10 @@ static void ring_stop_now(void) {
       s_alarms[slot].skip_next = false;    // the skip has been consumed
     }
   }
-  s_rs.pending_slot = -1;
-  s_rs.ring_started_at = 0;
-  s_rs.window_started_at = 0;
-  s_rs.snooze_count = 0;
+  // The cycle is over: clear all five cycle fields together (see
+  // runstate_end_cycle). Clearing deadline_at here is what stops yesterday's
+  // ring instant from making tonight's WC_WINDOW ring at window start.
+  runstate_end_cycle();
   reload_and_rearm();
   close_to_watchface();
 }
@@ -887,7 +971,7 @@ static void ring_snooze_now(void) {
   // ring_started_at (already set above) via the exact same logic every other
   // caller of sc_rearm uses, so there is exactly one code path that computes
   // that wakeup rather than two that could disagree.
-  bool armed = sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL));
+  bool armed = sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL), s_ringing);
   APP_LOG(APP_LOG_LEVEL_INFO, "SNOOZE #%d until %lu (ramp offset %d s)",
           s_rs.snooze_count, (unsigned long)until,
           s_rs.snooze_count * s_cfg.snooze_ramp_offset_s);
@@ -1187,34 +1271,30 @@ static void ring_minute_tick(struct tm *t, TimeUnits units) {
 }
 
 static void start_ring(int slot, bool from_deadline) {
-  s_rs.pending_slot = (int8_t)slot;
-  // A fresh deadline always means a fresh ring: reset unconditionally rather
-  // than probing snooze_count/ring_started_at for "does this look fresh",
-  // which is exactly the check that let a day-old snooze_count and
-  // ring_started_at survive an over_cap miss and poison every later alarm
-  // (elapsed = 86400+ s -> immediate over_cap, forever, silently).
-  if (from_deadline) {
-    s_rs.snooze_count = 0;
-    s_rs.ring_started_at = 0;
-  }
+  time_t now = time(NULL);
+  // A fresh deadline always means a fresh ring (`fresh` below), which resets the
+  // ring/snooze bookkeeping unconditionally rather than probing
+  // snooze_count/ring_started_at for "does this look fresh" -- that check is
+  // exactly what let a day-old snooze_count and ring_started_at survive an
+  // over_cap miss and poison every later alarm (elapsed = 86400+ s -> immediate
+  // over_cap, forever, silently).
+  //
+  // The cycle's hard alarm instant: "now" for a genuinely fresh deadline ring
+  // (accurate to within sc_schedule's +/-2 min E_RANGE shift), or the deadline
+  // this cycle already carries for a snooze/keep-alive continuation and for an
+  // early smart wake -- where the window it came from set it and it must not be
+  // overwritten with "now" (that would report an early wake as on-time).
+  time_t deadline = from_deadline ? now : (time_t)s_rs.deadline_at;
+  // A ring has no open smart window any more, hence window_start 0.
+  runstate_begin_cycle(slot, 0, deadline, from_deadline);
   // Only stamp "now" when there is genuinely nothing to resume: a snooze
   // expiry (ring_started_at already holds it) or a mid-ring keep-alive
   // relaunch (ring_started_at already holds the original start) must NOT be
   // overwritten here, or resuming would restart the ramp at t=0 and quietly
   // downgrade a long-running alarm back to its gentlest stage.
   if (s_rs.ring_started_at == 0) {
-    s_rs.ring_started_at = (uint32_t)time(NULL);
+    s_rs.ring_started_at = (uint32_t)now;
   }
-  // The hard alarm time for this ring cycle (RunState's documented meaning),
-  // for Task 11/12 to read. Only stamped on a genuinely fresh deadline, not on
-  // a snooze/keep-alive continuation of the same cycle -- ring_started_at at
-  // this exact point IS "now" whenever from_deadline just reset it above, so
-  // it is also the best available approximation of the actual deadline instant
-  // (accurate to within sc_schedule's +/-2 min E_RANGE shift).
-  if (from_deadline) {
-    s_rs.deadline_at = s_rs.ring_started_at;
-  }
-  s_rs.window_started_at = 0;
   as_save_runstate(&s_rs);
 
   // Record the night ONCE, on the first ring (never on a snooze resumption --
@@ -1231,10 +1311,12 @@ static void start_ring(int slot, bool from_deadline) {
   // Keep a wakeup live for the whole ring: if anything kills the app mid-ring
   // (another app's wakeup, a phone-initiated launch), the alarm comes back
   // instead of being lost.
-  sc_schedule(time(NULL) + SC_REENTRY_GAP_S, WC_SNOOZE);
+  sc_schedule(now + SC_REENTRY_GAP_S, WC_SNOOZE);
 
-  APP_LOG(APP_LOG_LEVEL_INFO, "RING start slot=%d deadline=%d sound=%d snooze=%d",
-          slot, (int)from_deadline, (int)sound_available(), s_rs.snooze_count);
+  APP_LOG(APP_LOG_LEVEL_INFO,
+          "RING start slot=%d deadline=%d sound=%d snooze=%d deadline_at=%lu",
+          slot, (int)from_deadline, (int)sound_available(), s_rs.snooze_count,
+          (unsigned long)s_rs.deadline_at);
 
   if (!s_ring_window) {
     s_ring_window = window_create();
@@ -1453,11 +1535,34 @@ static void poll_cb(void *data) {
 }
 
 static void open_smart_window(int slot, time_t window_start, time_t deadline) {
-  s_rs.pending_slot = (int8_t)slot;
-  s_rs.window_started_at = (uint32_t)window_start;
-  s_rs.deadline_at = (uint32_t)deadline;
-  s_rs.ring_started_at = 0;
-  s_rs.snooze_count = 0;
+  // A PENDING SNOOZE OWNS THE CYCLE -- never open a window over it (the
+  // whole-branch review's Important 4). Beginning a new cycle here zeroes
+  // ring_started_at and snooze_count, which together are the ONLY record of
+  // that snooze, while its already-scheduled WC_SNOOZE wakeup stays live and
+  // uncancelled. The expiry then lands in start_ring(pending_slot, false) with
+  // ring_started_at == 0 -- and pending_slot is now the newly tracked alarm, so
+  // the WRONG alarm rings, snooze_min after the snooze rather than at its own
+  // time. Two alarms 30 minutes apart do it: snooze the 07:00, and the 07:30
+  // alarm's window opens at 07:00, so the 07:30 alarm rings at 07:10.
+  //
+  // The condition is exactly sc_rearm's own definition of "a snooze wakeup is
+  // pending" (ring_started_at holds the snooze EXPIRY while a snooze is in
+  // flight -- see ring_snooze_now), so the two cannot disagree. sc_rearm keeps
+  // the wakeup chain alive: it re-places this snooze at priority 2 plus every
+  // alarm's own deadline, which is what the window branch would otherwise have
+  // relied on this call to do.
+  if (s_rs.snooze_count > 0 && s_rs.ring_started_at != 0
+      && (time_t)s_rs.ring_started_at > time(NULL)) {
+    APP_LOG(APP_LOG_LEVEL_INFO,
+            "SMART window for slot=%d declined: snooze #%d pending until %lu",
+            slot, s_rs.snooze_count, (unsigned long)s_rs.ring_started_at);
+    sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL), s_ringing);
+    return;
+  }
+
+  // A window opening begins a fresh cycle: all five cycle fields, in one place
+  // (see runstate_begin_cycle).
+  runstate_begin_cycle(slot, window_start, deadline, true);
   as_save_runstate(&s_rs);
 
   APP_LOG(APP_LOG_LEVEL_INFO, "SMART window open slot=%d until %lu",
@@ -1529,17 +1634,14 @@ static void handle_wakeup_cookie(int32_t cookie) {
         // `slot < s_count` bound again, and lands right back here -- so no
         // alarm ever rings again. Resetting it (and the ring bookkeeping that
         // goes with a fresh cycle) here is what breaks that loop.
-        s_rs.pending_slot = -1;
-        s_rs.ring_started_at = 0;
-        s_rs.snooze_count = 0;
-        // Also clear window_started_at (found in Task 11's review): ring_stop_now
-        // already does, but this out-of-range branch didn't -- harmless until
-        // Task 11 started setting it, which makes a stale open-window flag
-        // reachable here (e.g. the phone deletes the pending alarm while its
-        // smart window is open). Left set, sc_rearm below would re-arm
-        // WC_REENTRY for a window that no longer has a slot to evaluate, and
-        // poll_cb would keep polling forever with nothing to ring.
-        s_rs.window_started_at = 0;
+        //
+        // This ends the cycle, so it clears all five cycle fields through the
+        // one owner (runstate_end_cycle) rather than picking a subset by hand:
+        // window_started_at was the subset miss found in Task 11's review, and
+        // deadline_at was the subset miss the whole-branch review found
+        // (Critical 1) -- a stale deadline_at left here made the NEXT night's
+        // WC_WINDOW ring at window start, up to 60 minutes early.
+        runstate_end_cycle();
         as_save_runstate(&s_rs);
         // If the waiting screen happens to be up for this now-invalid window,
         // don't leave it stranded on screen: with window_started_at cleared,
@@ -1555,7 +1657,7 @@ static void handle_wakeup_cookie(int32_t cookie) {
         if (s_wait_window && window_stack_contains_window(s_wait_window)) {
           close_to_watchface();
         }
-        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now);
+        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
       }
       break;
     }
@@ -1580,18 +1682,33 @@ static void handle_wakeup_cookie(int32_t cookie) {
         when = ac_next_occurrence(&s_alarms[slot], now - 60);
       }
       if (slot < 0) {
-        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now);
+        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
         break;
       }
-      time_t ring = s_rs.deadline_at != 0 ? (time_t)s_rs.deadline_at
-                                          : sc_ring_deadline(&s_cfg, when);
+      // Trust the STORED deadline only while the cycle it belongs to is
+      // actually live -- window_started_at != 0 is what makes it live. Without
+      // that conjunct a deadline_at left behind by a finished cycle (the
+      // whole-branch review's Critical 1) reads as "the deadline passed ~24 h
+      // ago" and rings instantly at window start, up to 60 minutes early, every
+      // night from the second onwards. runstate_end_cycle now clears the field
+      // at both sites that end a cycle; this guard is the second line of
+      // defence, so a future path that forgets cannot resurrect the bug.
+      // Deriving the deadline from `when` instead is always correct here -- it
+      // is the same computation sc_rearm used to place this very wakeup.
+      time_t ring = (s_rs.window_started_at != 0 && s_rs.deadline_at != 0)
+                        ? (time_t)s_rs.deadline_at
+                        : sc_ring_deadline(&s_cfg, when);
+      APP_LOG(APP_LOG_LEVEL_INFO,
+              "WINDOW wakeup slot=%d now=%lu ring=%lu (stored window=%lu deadline=%lu)",
+              slot, (unsigned long)now, (unsigned long)ring,
+              (unsigned long)s_rs.window_started_at, (unsigned long)s_rs.deadline_at);
       if (now >= ring) {
         start_ring(slot, true);
         break;
       }
       bool smart_on = s_cfg.smart_enabled && PBL_IF_HEALTH_ELSE(true, false);
       if (!smart_on) {
-        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now);
+        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
         break;
       }
       time_t win = s_rs.window_started_at != 0 ? (time_t)s_rs.window_started_at
@@ -1600,7 +1717,7 @@ static void handle_wakeup_cookie(int32_t cookie) {
       break;
     }
     case WC_DST:
-      sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now);
+      sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
       break;
     default:
       break;
@@ -1638,7 +1755,7 @@ int main(void) {
     APP_LOG(APP_LOG_LEVEL_INFO, "LAUNCHED reason=%d", (int)launch_reason());
   }
 
-  if (!sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL))) {
+  if (!sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL), s_ringing)) {
     // A pending snooze exists (RunState says so) but its wakeup could not be
     // placed. This can happen if the user opens the app manually while a
     // snooze is in flight. There is no UI at this layer to surface it (Task
@@ -1666,7 +1783,45 @@ int main(void) {
   app_message_register_inbox_received(inbox_received);
   app_message_register_outbox_sent(outbox_sent);
   app_message_register_outbox_failed(outbox_failed);
-  app_message_open(512, 128);
+  // Ask for the largest buffers the platform can actually afford, rather than a
+  // hand-counted fixed size. The whole-branch review measured the worst-case
+  // config dict at 414 B against the old fixed 512 B inbox -- it fit, with ~98 B
+  // of headroom, and appending ONE key eats into that. An inbox overflow is not
+  // a partial read: the ENTIRE message is dropped as a NACK the watch never
+  // sees, alarm times included, which is the same silent-loss class as the
+  // missing config handshake above.
+  //
+  // NOT an unconditional app_message_open(inbox_size_maximum(),
+  // outbox_size_maximum()): those maxima are ~8 KB EACH and come out of the app
+  // heap (the firmware logs exactly that), and aplite's 24 KB app RAM leaves
+  // this app about 2.1 KB of heap in total -- the build's own memory report says
+  // so. There, asking for the maxima returns APP_MSG_OUT_OF_MEMORY and the app
+  // ends up with NO messaging at all: no config, no alarm times, nothing. That
+  // would be a worse failure than the tight inbox this is fixing. So the request
+  // is capped to what is free, keeping a reserve for the runtime allocations a
+  // ring/menu still has to make, and it never drops below the 512 B this app
+  // shipped with -- aplite therefore keeps exactly its current behaviour while
+  // every roomier platform gets the system maximum.
+  uint32_t in_size = app_message_inbox_size_maximum();
+  uint32_t out_size = app_message_outbox_size_maximum();
+  const uint32_t k_heap_reserve = 1536;
+  uint32_t heap = (uint32_t)heap_bytes_free();
+  if (in_size + out_size + k_heap_reserve > heap) {
+    out_size = 128;   // the only thing this app ever sends is a 1-byte request
+    uint32_t avail = heap > k_heap_reserve + out_size
+                         ? heap - k_heap_reserve - out_size : 0;
+    in_size = avail > 2048 ? 2048 : avail;
+    if (in_size < 512) {
+      in_size = 512;
+    }
+  }
+  AppMessageResult amr = app_message_open(in_size, out_size);
+  APP_LOG(amr == APP_MSG_OK ? APP_LOG_LEVEL_INFO : APP_LOG_LEVEL_ERROR,
+          "app_message_open(in=%u out=%u) = %d (heap was %u)",
+          (unsigned)in_size, (unsigned)out_size, (int)amr, (unsigned)heap);
+  // After open (the outbox does not exist before it) and after the handlers are
+  // registered above.
+  request_config();
 
   app_event_loop();
 

@@ -140,6 +140,56 @@ int main(void) {
     assert(!r.fire);
   }
 
+  // --- turn over ONCE and then stay still: the orientation bonus must NOT keep
+  // scoring for the rest of the window.
+  //
+  // The whole-branch review's Important 1. The reference orientation used to be
+  // computed once (the ten minutes before the window) and held fixed, so a
+  // settled new posture differed from it every remaining minute and scored
+  // orient_bonus every minute -- the accumulator grew without bound and the
+  // window effectively ended at the first posture change regardless of the
+  // sensitivity. required_minutes is raised past anything se_default_cfg would
+  // clamp to (deliberately set after cfg_for) so se_evaluate cannot return
+  // early on the legitimate turn-over fire and the accumulator at the END of
+  // the window is observable: with the fixed reference it was 400 * 25 and
+  // fire was true; with the rolling reference the settled posture stops
+  // contributing, so acc resets to 0 and the window keeps judging the night. ---
+  {
+    g_seed = 11;
+    fill_rest(N, 30, 0);              // flat VMC: orientation is the only signal
+    for (int i = WIN + 3; i < N; i++) {
+      g_s[i].orientation = 0x77;      // one turn-over at window minute 3, then still
+    }
+    SleepEvalCfg c = cfg_for(90, 2);
+    c.required_minutes = 25;
+    SleepEvalResult r = se_evaluate(g_s, N, WIN, false, &c);
+    printf("  settled    fire=%d final_acc=%lu\n", (int)r.fire, (unsigned long)r.acc);
+    assert(!r.fire);
+    assert(r.acc == 0);
+  }
+
+  // --- a SLOW posture drift (one quantisation step every five minutes -- a
+  // wrist sagging, not a turn-over) must not be scored as a turn-over either.
+  // Cumulatively the drift passes orient_step, which a fixed pre-window
+  // reference could only read as "changed", so it fired on the bonus alone even
+  // at a percentile whose trigger level the night never came close to (measured:
+  // P97, level 573, fired at window minute 11 on acc == 2 * orient_bonus). The
+  // rolling reference tracks the drift, so the night is judged on movement --
+  // which is what makes the sensitivity setting mean something here. ---
+  {
+    g_seed = 12;
+    fill_skewed(N);
+    for (int i = WIN; i < N; i++) {
+      int steps = (i - WIN) / 5;
+      g_s[i].orientation = (uint8_t)(0x30 | ((3 + steps) & 0x0F));
+    }
+    SleepEvalCfg c = cfg_for(97, 2);
+    SleepEvalResult r = se_evaluate(g_s, N, WIN, false, &c);
+    printf("  drift@P97  level=%u fire=%d\n", r.trigger_level, (int)r.fire);
+    assert(r.trigger_level > 400);    // the night never reaches this on movement
+    assert(!r.fire);                  // ... so nothing may fire it
+  }
+
   // --- a restless early stretch must not blind the algorithm. The MEDIAN
   // baseline is what makes this work; a mean would be dragged up. ---
   {

@@ -3,6 +3,31 @@
 #include <pebble.h>
 #include <string.h>
 
+// PK_ALARMS is the one persisted blob with no version byte: it is a bare array
+// of Alarm, and the only validation as_load_alarms can do is that the stored
+// length divides evenly by sizeof(Alarm). That check is silently unsound if
+// sizeof(Alarm) ever changes -- grow Alarm from 6 to 8 bytes and an old
+// 48-byte blob still divides evenly, so eight real alarms are read back as six
+// garbage ones (wrong times, wrong days) with no error anywhere. A version
+// prefix would change the persisted format for existing installs, so instead
+// the assumption is pinned here: if Alarm's layout changes, THIS assert fails at
+// compile time and whoever changed it must add a migration (bump the key, or
+// prefix a version) rather than discovering it as garbage alarms on a watch.
+_Static_assert(sizeof(Alarm) == 6,
+               "PK_ALARMS is an unversioned Alarm array whose only validation is "
+               "length % sizeof(Alarm) == 0 -- changing Alarm's size silently "
+               "misreads existing blobs. Add a migration for PK_ALARMS.");
+
+// Config and RunState are each persisted whole under one key, so both must stay
+// inside PebbleOS's 256-byte per-key cap -- the same limit NightBlob already
+// asserts against below. Config is the one that will actually grow: it embeds
+// EscParams, so a new escalation field lands in this blob too. Over the cap,
+// prv_write's write fails and every setting silently reverts on the next launch.
+_Static_assert(sizeof(Config) <= 256,
+               "Config exceeds the 256-byte persist limit for one key");
+_Static_assert(sizeof(RunState) <= 256,
+               "RunState exceeds the 256-byte persist limit for one key");
+
 void as_load_alarms(Alarm *out, int *count) {
   memset(out, 0, sizeof(Alarm) * MAX_ALARMS);
   *count = 0;

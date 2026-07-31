@@ -83,7 +83,7 @@ static time_t prv_next_dst_check(time_t now) {
 }
 
 bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
-              const RunState *rs, time_t now) {
+              const RunState *rs, time_t now, bool ringing) {
   // Cancel-then-reschedule is the only reliable approach: WakeupIds are lost when
   // the app is killed, so there is nothing to selectively cancel after a relaunch.
   sc_cancel_all();
@@ -137,7 +137,19 @@ bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
   // adding snooze_min again here would double the snooze the user asked for.
   // A value in the past means the snooze already expired and the ring is running,
   // which start_ring's own keep-alive wakeup covers.
-  if (rs->ring_started_at != 0 && rs->snooze_count > 0) {
+  if (ringing) {
+    // An alarm is RINGING right now. sc_cancel_all above just dropped the
+    // mid-ring keep-alive that start_ring (and handle_wakeup_cookie's own
+    // mid-ring branch) rely on to bring the alarm back if anything evicts the
+    // app, and nothing else here would replace it: the snooze branch below is
+    // false for a first, un-snoozed ring (snooze_count == 0), and false again
+    // for a ring resumed after a snooze (ring_started_at then holds an expiry
+    // already in the past). So a re-arm during a ring -- a phone config save
+    // arriving mid-ring is the reachable one, and burst_cb's over_cap path the
+    // other -- silently left the ring with no wakeup at all. Put the keep-alive
+    // back, on the same cookie and gap start_ring uses.
+    sc_schedule(now + SC_REENTRY_GAP_S, WC_SNOOZE);
+  } else if (rs->ring_started_at != 0 && rs->snooze_count > 0) {
     time_t snooze_until = (time_t)rs->ring_started_at;
     if (snooze_until > now) {
       if (sc_schedule(snooze_until, WC_SNOOZE) == 0) {

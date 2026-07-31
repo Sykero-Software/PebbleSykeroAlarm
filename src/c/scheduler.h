@@ -35,8 +35,18 @@ void sc_cancel_all(void);
 // due) -- true otherwise, including when there was nothing critical to arm.
 // A caller that is about to exit the app on the strength of "the wakeup is
 // armed" (ring_snooze_now) must check this rather than assume success.
+//
+// `ringing` must be the caller's live "an alarm is ringing right now" state.
+// It cannot be derived from RunState: a first, un-snoozed ring has
+// snooze_count == 0, which is indistinguishable in RunState from a ring that
+// has ended. Because this function cancels EVERY wakeup first, a re-arm during
+// a ring (e.g. a phone config save arriving mid-ring -> reload_and_rearm)
+// otherwise dropped start_ring's mid-ring keep-alive and never replaced it --
+// after which an eviction lost the ring with nothing scheduled to bring it
+// back. With `ringing` true the keep-alive is re-armed in place of the snooze
+// wakeup.
 bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
-              const RunState *rs, time_t now);
+              const RunState *rs, time_t now, bool ringing);
 
 // (Re)place the rolling re-entry wakeup SC_REENTRY_GAP_S from now.
 void sc_arm_reentry(time_t now);

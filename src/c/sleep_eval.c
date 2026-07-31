@@ -263,14 +263,6 @@ SleepEvalResult se_evaluate(const SleepMinute *samples, int count, int window_st
   }
   r.trigger_level = (uint16_t)level;
 
-  // The orientation reference is the mode of the ten minutes before the window.
-  int ref_from = window_start - 10;
-  if (ref_from < 0) {
-    ref_from = 0;
-  }
-  uint8_t ref_orient = prv_orientation_mode(samples, ref_from, window_start > ref_from
-                                                              ? window_start : ref_from + 1);
-
   uint32_t acc = 0;
   int contributing = 0;
   for (int i = window_start; i < count; i++) {
@@ -279,6 +271,33 @@ SleepEvalResult se_evaluate(const SleepMinute *samples, int count, int window_st
       contributing = 0;
       continue;
     }
+    // The orientation reference is the mode of the ten minutes IMMEDIATELY
+    // BEFORE this one -- ROLLING, recomputed per window minute.
+    //
+    // It used to be computed once, from the ten minutes before the window, and
+    // then held fixed for the whole window. That made a wrist which settled
+    // into a new position score orient_bonus (400) EVERY remaining minute of
+    // the window instead of once, so the accumulator grew without bound from
+    // the first sustained turn-over onwards: the window effectively ended at
+    // the first posture change no matter how the sensitivity was set, which
+    // made the sensitivity setting inert exactly when orientation was the
+    // signal that fired (measured on the host: a flat-VMC night with one
+    // posture change fired at the same window minute at P70/P79/P88/P97, and
+    // with required_minutes raised to 25 it still fired, acc = 400 * 25).
+    //
+    // Rolling, a genuine turn-over still contributes -- for the ~6 minutes the
+    // mode takes to catch up (5 of the 10 reference minutes must be the new
+    // posture before the mode flips), which comfortably satisfies
+    // required_minutes (1..5), so the turn-over case still fires and near the
+    // same minute. But a posture that has SETTLED stops contributing, so the
+    // accumulator resets and the window goes on judging the night.
+    int ref_from = i - 10;
+    if (ref_from < 0) {
+      ref_from = 0;
+    }
+    uint8_t ref_orient = prv_orientation_mode(samples, ref_from,
+                                              i > ref_from ? i : ref_from + 1);
+
     bool contributed = false;
     if (samples[i].vmc > r.trigger_level) {
       acc += (uint32_t)(samples[i].vmc - r.trigger_level);

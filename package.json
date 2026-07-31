@@ -25,7 +25,8 @@
       "EscSoundAfterS", "EscSoundRampS", "EscVolStart", "EscVolMax", "EscCapS",
       "SnoozeMin", "SnoozeMax", "SnoozeRampOffsetS",
       "StopGesture", "LightPulse", "DstCheck",
-      "IdleExitSec", "CfgOpen"
+      "IdleExitSec", "CfgOpen",
+      "CfgRequest"
     ],
     "resources": {
       "media": [

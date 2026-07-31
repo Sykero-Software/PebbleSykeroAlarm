@@ -2,6 +2,7 @@
 import { packAlarmSet, unpackAlarmSet, SLOT_COUNT, SlotFields } from './alarm_pack';
 import { buildConfig } from './config_clay';
 import clayConfigCustom from './config_clay_custom';
+import { resendDict, saveDict } from './config_sync';
 
 declare const require: any;
 
@@ -111,10 +112,36 @@ if (typeof Pebble !== 'undefined') {
     }
     const settings = getClay().getSettings(e.response, false);
     const dict = buildDict(settings);
+    // Persist FIRST, then send: the send is the unreliable half (the watchapp is
+    // very likely not running), so the saved copy is what actually delivers this
+    // config -- on the watch's next launch, via the CfgRequest reply below.
+    // Saving only in the success callback would lose exactly the case this
+    // exists for.
+    saveDict(function (k, v) { window.localStorage.setItem(k, v); }, dict);
     console.log('SmartAlarm: sending AlarmSet=' + dict.AlarmSet);
     Pebble.sendAppMessage(dict,
       function () { console.log('SmartAlarm: settings delivered'); },
       function (err: any) { console.log('SmartAlarm: send failed ' + JSON.stringify(err)); });
+  });
+
+  // The watch asks for its config on every launch (main.c's request_config) --
+  // see config_sync.ts for why that handshake exists at all.
+  Pebble.addEventListener('appmessage', function (e: any) {
+    const p = e && e.payload;
+    if (!p || p.CfgRequest === undefined || p.CfgRequest === null) {
+      return;
+    }
+    const dict = resendDict(function (k) { return window.localStorage.getItem(k); });
+    if (!dict) {
+      // Nothing was ever saved on this phone: stay silent rather than send an
+      // empty dict, which would clobber the watch's own persisted state.
+      console.log('SmartAlarm: CfgRequest but nothing saved yet -- staying silent');
+      return;
+    }
+    console.log('SmartAlarm: CfgRequest -> resending AlarmSet=' + dict.AlarmSet);
+    Pebble.sendAppMessage(dict,
+      function () { console.log('SmartAlarm: config resent'); },
+      function (err: any) { console.log('SmartAlarm: resend failed ' + JSON.stringify(err)); });
   });
 
   Pebble.addEventListener('ready', function () {
