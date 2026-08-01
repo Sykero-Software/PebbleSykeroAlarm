@@ -43,6 +43,48 @@ time_t ac_next_occurrence(const Alarm *a, time_t now);
 // that alarm's time to *out_when (may be NULL).
 int ac_next_alarm(const Alarm *alarms, int count, time_t now, time_t *out_when);
 
+// Like ac_next_alarm, but never returns an occurrence that HAS ALREADY RUNG.
+//
+// A ring can end BEFORE its own alarm time -- that is the whole point of the
+// smart window -- and then "the next occurrence strictly after now" is still
+// today's, the very one that just rang. Re-arming it made a 07:50 alarm whose
+// window opened at 07:20 ring twice, at 07:20 and again at 07:50, with no
+// snooze involved (reported from the wrist 2026-08-01). Every path that ends or
+// interrupts a ring re-arms -- Stop, the missed-alarm cap, a phone config save,
+// the nightly DST check, an ordinary app launch -- so the fact "this occurrence
+// has rung" has to be persisted state consulted here, not a one-off adjustment
+// at the call site that ends the ring.
+//
+// `served_slot` is the slot whose ring already happened and `served_at` that
+// ring's instant (RunState.served_slot/served_at); served_slot < 0 means nothing
+// has rung and this behaves exactly like ac_next_alarm. `lead_s` is how far
+// before the occurrence a ring starts (0 for "ringing starts at the set time",
+// the escalation's full development time for "awake by"), so the comparison is
+// made in ring instants and holds under both semantics.
+//
+// The slot must match as well as the instant: an alarm at 07:30 must still ring
+// after the 07:50 one rang early at 07:20, and only same-slot occurrences are a
+// day or more apart, which is what makes the <= comparison (and the tolerance
+// below) safe.
+//
+// A ring may start slightly BEFORE the instant it was scheduled for: sc_schedule
+// shifts a wakeup by +/-1 and +/-2 minutes when another app already owns one
+// within a minute (E_RANGE), so a deadline ring for 07:50 can begin at 07:48 and
+// record 07:48 as served. Without the tolerance below, "the next occurrence
+// after 07:49" is again today's 07:50 and the same alarm rings twice -- the same
+// defect as the early smart wake, by a rarer route.
+#define AC_SERVED_TOLERANCE_S 180
+
+// True when the occurrence `when` of slot `slot` is the one already recorded as
+// rung. Exposed separately so the wakeup handler can refuse to (re)open a window
+// for it without restating the tolerance -- one owner for the comparison.
+bool ac_is_served(time_t when, int slot, int served_slot, time_t served_at,
+                  int32_t lead_s);
+
+int ac_next_alarm_unserved(const Alarm *alarms, int count, time_t now,
+                           int served_slot, time_t served_at, int32_t lead_s,
+                           time_t *out_when);
+
 // Parse the packed AlarmSet wire format into out[]:
 //     "07:00|1111100;-08:30|0000011"
 // slots separated by ';', each "[-]HH:MM|DDDDDDD" where the seven digits are

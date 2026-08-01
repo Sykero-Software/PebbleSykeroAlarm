@@ -3,6 +3,7 @@
 #include <string.h>
 #include "alarm_calc.h"
 #include "alarm_store.h"
+#include "debug_dump.h"
 #include "escalation.h"
 #include "health_read.h"
 #include "scheduler.h"
@@ -370,6 +371,25 @@ static int16_t list_cell_height(MenuLayer *ml, MenuIndex *ci, void *ctx) {
   return 44;   // two lines: time + weekday/next
 }
 
+// The next occurrence the SCHEDULER will actually arm -- i.e. skipping one that
+// has already rung. The display and the scheduler must agree: an early smart
+// wake leaves its own alarm time in the future, so a row reading "in 30 min" for
+// a ring that is no longer going to happen is precisely how the double-ring
+// defect looked from the wrist. Reuses the same pure, host-tested picker sc_rearm
+// uses, over a one-element array so `slot` is 0 for the row being asked about.
+static time_t next_armed_occurrence(int row) {
+  if (row < 0 || row >= s_count) {
+    return 0;
+  }
+  time_t now = time(NULL);
+  int served = (s_rs.served_slot == (int8_t)row) ? 0 : -1;
+  int32_t lead_s = (int32_t)(now - sc_ring_deadline(&s_cfg, now));
+  time_t when = 0;
+  ac_next_alarm_unserved(&s_alarms[row], 1, now, served, (time_t)s_rs.served_at,
+                         lead_s, &when);
+  return when;
+}
+
 static void list_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void *ctx) {
   GRect b = layer_get_bounds(cell);
   bool hl = menu_cell_layer_is_highlighted(cell);
@@ -411,7 +431,7 @@ static void list_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
 
   char days[12], rel[16], sub[32];
   fmt_weekdays(a->weekday_mask, days, sizeof(days));
-  fmt_relative(ac_next_occurrence(a, time(NULL)), time(NULL), rel, sizeof(rel));
+  fmt_relative(next_armed_occurrence(ci->row), time(NULL), rel, sizeof(rel));
   snprintf(sub, sizeof(sub), "%s  %s", days, a->enabled ? rel : "off");
   graphics_draw_text(gctx, sub, fonts_get_system_font(FONT_KEY_GOTHIC_18),
       GRect(4, 20, b.size.w - 8, 22), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
@@ -607,7 +627,10 @@ static void main_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
     case MAIN_ROW_ALARMS: {
       char sub[24];
       time_t when = 0;
-      int slot = ac_next_alarm(s_alarms, s_count, time(NULL), &when);
+      time_t nw = time(NULL);
+      int slot = ac_next_alarm_unserved(
+          s_alarms, s_count, nw, (int)s_rs.served_slot, (time_t)s_rs.served_at,
+          (int32_t)(nw - sc_ring_deadline(&s_cfg, nw)), &when);
       if (slot < 0) {
         snprintf(sub, sizeof(sub), "none set");
       } else {
@@ -1314,6 +1337,16 @@ static void start_ring(int slot, bool from_deadline) {
   if (s_rs.ring_started_at == 0) {
     s_rs.ring_started_at = (uint32_t)now;
   }
+  // THIS OCCURRENCE HAS NOW RUNG -- recorded here, at the ring, rather than at
+  // any of the places a ring ENDS, because all three of those (Stop, the
+  // missed-alarm cap, snooze-then-stop) must count as served and only this one
+  // place is common to them. Nothing clears it: an early smart wake ends the
+  // ring while its own alarm time is still in the future, so this has to outlive
+  // the cycle or every later re-arm (Stop, a phone config save, the 03:00 DST
+  // check, an ordinary launch) picks the same occurrence again -- which is
+  // exactly how a 07:50 alarm rang at 07:20 and then again at 07:50.
+  s_rs.served_slot = (int8_t)slot;
+  s_rs.served_at = (uint32_t)deadline;
   as_save_runstate(&s_rs);
 
   // Record the night ONCE, on the first ring (never on a snooze resumption --
@@ -1723,6 +1756,20 @@ static void handle_wakeup_cookie(int32_t cookie) {
         sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
         break;
       }
+      // NEVER re-open a window for an occurrence that has already rung. sc_rearm
+      // no longer arms one (it picks with ac_next_alarm_unserved), so this is
+      // unreachable today; it is the second line of defence for the same reason
+      // the deadline guard below is one -- a future path that forgets must not be
+      // able to resurrect the double ring, which cost the user a 07:20 wake AND a
+      // 07:50 one on the same morning.
+      if (ac_is_served(when, slot, (int)s_rs.served_slot, (time_t)s_rs.served_at,
+                       (int32_t)(now - sc_ring_deadline(&s_cfg, now)))) {
+        APP_LOG(APP_LOG_LEVEL_WARNING,
+                "WINDOW wakeup for slot %d ignored: occurrence %lu already rang",
+                slot, (unsigned long)when);
+        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
+        break;
+      }
       // Trust the STORED deadline only while the cycle it belongs to is
       // actually live -- window_started_at != 0 is what makes it live. Without
       // that conjunct a deadline_at left behind by a finished cycle (the
@@ -1877,6 +1924,12 @@ int main(void) {
   // After open (the outbox does not exist before it) and after the handlers are
   // registered above.
   request_config();
+
+  // TEMPORARY (2026-08-01): dump the past night to `pebble logs` so the
+  // "rang 30 minutes early" report can be read off the watch's own recorded
+  // data instead of guessed at. Compiled out by SA_DEBUG_DUMP = 0, and it
+  // declines to run while a smart window or ring is live -- it borrows s_night.
+  dbg_dump(s_alarms, s_count, &s_cfg, &s_rs, s_night, S_NIGHT_LEN);
 
   app_event_loop();
 

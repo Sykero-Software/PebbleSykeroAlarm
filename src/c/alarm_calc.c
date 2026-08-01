@@ -100,6 +100,41 @@ int ac_next_alarm(const Alarm *alarms, int count, time_t now, time_t *out_when) 
   return best;
 }
 
+bool ac_is_served(time_t when, int slot, int served_slot, time_t served_at,
+                  int32_t lead_s) {
+  return served_slot >= 0 && slot == served_slot && when != 0
+         && (when - (time_t)lead_s) <= served_at + AC_SERVED_TOLERANCE_S;
+}
+
+int ac_next_alarm_unserved(const Alarm *alarms, int count, time_t now,
+                           int served_slot, time_t served_at, int32_t lead_s,
+                           time_t *out_when) {
+  time_t base = now;
+  // One occurrence at most can be marked served, so this converges on the second
+  // pass; the bound is a backstop against a future caller passing something that
+  // does not advance rather than an expected number of iterations.
+  for (int guard = 0; guard <= MAX_ALARMS; guard++) {
+    time_t when = 0;
+    int slot = ac_next_alarm(alarms, count, base, &when);
+    if (slot < 0) {
+      break;
+    }
+    if (!ac_is_served(when, slot, served_slot, served_at, lead_s)) {
+      if (out_when != NULL) {
+        *out_when = when;
+      }
+      return slot;
+    }
+    // This occurrence has already rung: look strictly past it. `when` is a real
+    // occurrence instant, so the next pass cannot return it again.
+    base = when;
+  }
+  if (out_when != NULL) {
+    *out_when = 0;
+  }
+  return -1;
+}
+
 // Read exactly `digits` ASCII digits into *out. Returns the position after them,
 // or NULL if any character is not a digit.
 static const char *prv_read_uint(const char *p, int digits, uint16_t *out) {

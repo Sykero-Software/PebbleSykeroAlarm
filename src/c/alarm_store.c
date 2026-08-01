@@ -146,6 +146,10 @@ void as_load_runstate(RunState *out) {
   memset(out, 0, sizeof(*out));
   out->version = RUNSTATE_VERSION;
   out->pending_slot = -1;
+  // -1, not the memset's 0: "slot 0, at epoch 0" is a claim about slot 0 rather
+  // than the absence of one. It happens to be harmless (no 2026 occurrence is
+  // within the tolerance of epoch 0), which is exactly why it would rot quietly.
+  out->served_slot = -1;
 }
 
 void as_save_runstate(const RunState *rs) {

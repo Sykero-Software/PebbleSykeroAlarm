@@ -228,6 +228,85 @@ int main(void) {
     assert(cnt == 1);
   }
 
+  // --- ac_next_alarm_unserved: an occurrence that has already RUNG must never
+  // be armed a second time.
+  //
+  // The defect this exists for, reported from the wrist 2026-08-01: a 07:50
+  // alarm whose smart window opened at 07:20 rang early, was dismissed at
+  // 07:20 -- and then rang AGAIN at 07:50, with no snooze involved. Ending the
+  // ring re-arms from time(NULL), and "the next occurrence strictly after
+  // 07:20" is that same 07:50. The deadline path never showed it (a ring that
+  // starts AT the alarm time ends after it, so the next occurrence is already
+  // tomorrow's), and the emulator cannot fire an early smart wake at all.
+  {
+    Alarm daily = { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x7F,
+                    .enabled = true };
+    time_t when = 0;
+    const time_t today = at(2026, 8, 1, 7, 50);
+    const time_t tomorrow = at(2026, 8, 2, 7, 50);
+    const time_t early = at(2026, 8, 1, 7, 21);   // just after the early ring
+
+    // Nothing served yet (served_slot < 0) behaves exactly like ac_next_alarm.
+    assert(ac_next_alarm_unserved(&daily, 1, early, -1, 0, 0, &when) == 0);
+    assert(when == today);
+
+    // Served: slot 0's 07:50 ring already happened, so the next thing to arm is
+    // TOMORROW's occurrence -- this is the whole bug.
+    assert(ac_next_alarm_unserved(&daily, 1, early, 0, today, 0, &when) == 0);
+    assert(when == tomorrow);
+
+    // ... and once that occurrence is in the past the stored served_at is inert,
+    // so no clearing pass is needed anywhere.
+    assert(ac_next_alarm_unserved(&daily, 1, at(2026, 8, 1, 8, 0), 0, today, 0,
+                                  &when) == 0);
+    assert(when == tomorrow);
+
+    // A DIFFERENT slot at an earlier time must NOT be swallowed by the skip:
+    // matching on the slot as well as the instant is what keeps a 07:30 alarm
+    // ringing after the 07:50 one rang early.
+    {
+      Alarm two[2] = {
+        { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x7F, .enabled = true },
+        { .minute_of_day = 7 * 60 + 30, .weekday_mask = 0x7F, .enabled = true },
+      };
+      // now 07:21, slot 0's 07:50 served -> slot 1's 07:30 today still wins.
+      assert(ac_next_alarm_unserved(two, 2, early, 0, today, 0, &when) == 1);
+      assert(when == at(2026, 8, 1, 7, 30));
+    }
+
+    // "Awake by" semantics: served_at is the RING instant, which sits lead_s
+    // before the occurrence. The same occurrence must still be recognised as
+    // served, so the comparison is made in ring-instant terms rather than
+    // occurrence terms.
+    const int32_t lead_s = 6 * 60;                       // esc_full_development_s
+    const time_t served_ring = today - lead_s;           // 07:44
+    assert(ac_next_alarm_unserved(&daily, 1, at(2026, 8, 1, 7, 30), 0,
+                                  served_ring, lead_s, &when) == 0);
+    assert(when == tomorrow);
+
+    // A ring that STARTED EARLY because sc_schedule shifted its wakeup (E_RANGE
+    // moves a wakeup by up to 2 minutes) records that earlier instant as served.
+    // Today's 07:50 must still count as rung, or the deadline path double-rings
+    // too -- rarer than the smart-window case, same defect.
+    assert(ac_next_alarm_unserved(&daily, 1, at(2026, 8, 1, 7, 49), 0,
+                                  at(2026, 8, 1, 7, 48), 0, &when) == 0);
+    assert(when == tomorrow);
+
+    // The tolerance must not reach a whole occurrence: yesterday's ring has no
+    // hold over the next one, a day later.
+    assert(ac_next_alarm_unserved(&daily, 1, at(2026, 8, 1, 8, 0), 0,
+                                  at(2026, 7, 31, 7, 50), 0, &when) == 0);
+    assert(when == tomorrow);
+
+    // A one-time alarm that has been disabled by ringing still reports "none".
+    {
+      Alarm once = { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0,
+                     .enabled = false };
+      assert(ac_next_alarm_unserved(&once, 1, early, 0, today, 0, &when) == -1);
+      assert(when == 0);
+    }
+  }
+
   printf("test_alarm_calc: all assertions passed\n");
   return 0;
 }

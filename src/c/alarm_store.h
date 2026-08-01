@@ -30,7 +30,11 @@
 // layout. The version is what discards it; the phone's launch handshake then
 // re-applies the user's real settings.
 #define CONFIG_VERSION    2
-#define RUNSTATE_VERSION  1
+// Bumped 1 -> 2: RunState gained served_slot/served_at, the record of which alarm
+// occurrence has already rung. sizeof(RunState) changes, so as_load_runstate's
+// length check would discard a stale blob on its own; the bump states the intent
+// and matches the convention above. Discarding costs at most a pending snooze.
+#define RUNSTATE_VERSION  2
 // Bumped 1 -> 2 (Task 12 review): NightSummary gained fired_by_deadline, shifting
 // the byte offsets of alt_percentile/alt_fired_min within the persisted blob. A
 // stale v1 blob is discarded by as_load_nights' version check rather than being
@@ -82,6 +86,12 @@ typedef struct {
   uint8_t  snooze_count;
   bool     smart_unavailable;   // set when the last window had no usable data
   bool     missed[MAX_ALARMS];  // hit the cap with nobody dismissing it
+  // WHICH OCCURRENCE HAS ALREADY RUNG -- deliberately NOT part of the cycle (see
+  // runstate_begin_cycle/runstate_end_cycle): its whole purpose is to OUTLIVE the
+  // cycle, because a ring that ended early leaves its own alarm time still in the
+  // future. Cleared by nothing; it expires by itself once that instant is past.
+  int8_t   served_slot;         // -1 when nothing has rung
+  uint32_t served_at;           // the ring instant that was served
 } RunState;
 
 #define NIGHT_HISTORY    7

@@ -90,7 +90,19 @@ bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
   bool ok = true;
 
   time_t alarm_when = 0;
-  int slot = ac_next_alarm(alarms, count, now, &alarm_when);
+  // The lead time between an occurrence and the instant its ring must start: 0
+  // under SEMANTICS_RING_STARTS, the escalation's full development under
+  // SEMANTICS_AWAKE_BY. Derived FROM sc_ring_deadline rather than recomputed, so
+  // that function stays the single owner of the semantics; the difference does
+  // not depend on which occurrence it is asked about, so `now` serves as the
+  // reference.
+  int32_t lead_s = (int32_t)(now - sc_ring_deadline(cfg, now));
+  // ...unserved: an occurrence that already rang must never be armed again. A
+  // smart window can ring at 07:20 for a 07:50 alarm, and then "the next
+  // occurrence after now" is still today's 07:50 -- the alarm rang twice, with
+  // no snooze, on a real wrist (2026-08-01). Every re-arm reads the record.
+  int slot = ac_next_alarm_unserved(alarms, count, now, (int)rs->served_slot,
+                                    (time_t)rs->served_at, lead_s, &alarm_when);
 
   // PRIORITY 1 — the hard deadline. Scheduled before anything else so that if
   // slots or E_RANGE retries run out, the thing that still exists is the alarm.
