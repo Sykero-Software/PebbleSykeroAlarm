@@ -122,6 +122,26 @@ time_t ac_window_start(uint8_t semantics, bool smart_window_active,
                        uint16_t window_min, uint32_t full_dev_s,
                        time_t alarm_time);
 
+// Drop every SPENT one-time alarm -- weekday_mask == 0 and not enabled -- from
+// alarms[0..count), compacting the survivors down. Returns the new count.
+//
+// A one-time alarm that is switched off has no future occurrence, so it is a dead
+// row. That would be cosmetic if anything could delete it, and nothing can: the
+// watch has no delete by design (times are set from the phone), and the phone
+// cannot delete one IT NEVER KNEW ABOUT -- the watch's own "Test alarm" writes a
+// slot straight into the array without touching the recorded AlarmSet string, so
+// the phone's next config is byte-identical to the last applied one and
+// ac_apply_set_if_changed correctly treats it as a no-op. The result, seen on the
+// real watch 2026-08-01: two spent test alarms (00:00 and 00:11) that the user
+// could not remove from either side.
+//
+// `missed` is compacted alongside (it is indexed by slot), and *pending_slot /
+// *served_slot are remapped -- to -1 if their own slot was the one dropped. Any
+// of the three may be NULL. Getting this wrong would alias one alarm's state onto
+// another, which is the same index-drift class as the positional message keys.
+int ac_prune_spent_one_time(Alarm *alarms, int count, bool *missed,
+                            int8_t *pending_slot, int8_t *served_slot);
+
 // Parse the packed AlarmSet wire format into out[]:
 //     "07:00|1111100;-08:30|0000011"
 // slots separated by ';', each "[-]HH:MM|DDDDDDD" where the seven digits are

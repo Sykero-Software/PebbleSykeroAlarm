@@ -166,6 +166,43 @@ int ac_next_alarm_unserved(const Alarm *alarms, int count, time_t now,
   return -1;
 }
 
+int ac_prune_spent_one_time(Alarm *alarms, int count, bool *missed,
+                           int8_t *pending_slot, int8_t *served_slot) {
+  if (alarms == NULL || count <= 0) {
+    return count > 0 ? count : 0;
+  }
+  int map[MAX_ALARMS];
+  int w = 0;
+  for (int r = 0; r < count && r < MAX_ALARMS; r++) {
+    if (alarms[r].weekday_mask == 0 && !alarms[r].enabled) {
+      map[r] = -1;
+      continue;
+    }
+    map[r] = w;
+    alarms[w] = alarms[r];
+    if (missed != NULL) {
+      missed[w] = missed[r];
+    }
+    w++;
+  }
+  if (w == count) {
+    return count;   // nothing spent: leave every index exactly as it was
+  }
+  for (int i = w; i < MAX_ALARMS; i++) {
+    alarms[i] = (Alarm){0};
+    if (missed != NULL) {
+      missed[i] = false;
+    }
+  }
+  if (pending_slot != NULL && *pending_slot >= 0) {
+    *pending_slot = (*pending_slot < count) ? (int8_t)map[*pending_slot] : -1;
+  }
+  if (served_slot != NULL && *served_slot >= 0) {
+    *served_slot = (*served_slot < count) ? (int8_t)map[*served_slot] : -1;
+  }
+  return w;
+}
+
 // Read exactly `digits` ASCII digits into *out. Returns the position after them,
 // or NULL if any character is not a digit.
 static const char *prv_read_uint(const char *p, int digits, uint16_t *out) {

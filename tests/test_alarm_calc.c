@@ -368,6 +368,64 @@ int main(void) {
     }
   }
 
+  // --- ac_prune_spent_one_time: a switched-off one-time alarm is a dead row that
+  // NOTHING could delete (the watch has no delete, and the phone never knew about
+  // a watch-created Test alarm). Two of them were stuck on the real watch.
+  {
+    Alarm a4[MAX_ALARMS] = {
+      { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x7F, .enabled = true },
+      { .minute_of_day = 0,           .weekday_mask = 0,    .enabled = false },  // spent
+      { .minute_of_day = 11,          .weekday_mask = 0,    .enabled = false },  // spent
+      { .minute_of_day = 8 * 60 + 30, .weekday_mask = 0x60, .enabled = true },
+    };
+    bool missed[MAX_ALARMS] = { false, true, false, true };
+    int8_t pending = 3, served = 3;
+    assert(ac_prune_spent_one_time(a4, 4, missed, &pending, &served) == 2);
+    assert(a4[0].minute_of_day == 7 * 60 + 50);
+    assert(a4[1].minute_of_day == 8 * 60 + 30);
+    // missed[] is indexed by slot, so it must move with them -- slot 3's marker
+    // belongs to the 08:30 alarm, now at slot 1.
+    assert(missed[0] == false && missed[1] == true);
+    assert(missed[2] == false && missed[3] == false);
+    // ... and so must the two RunState slot references, or one alarm's state
+    // silently becomes another's.
+    assert(pending == 1 && served == 1);
+
+    // A reference to a slot that was itself dropped becomes "none": keeping the
+    // number would point it at whichever alarm slid into that index.
+    Alarm a2[MAX_ALARMS] = {
+      { .minute_of_day = 30, .weekday_mask = 0, .enabled = false },   // spent
+      { .minute_of_day = 7 * 60, .weekday_mask = 0x1F, .enabled = true },
+    };
+    int8_t p2 = 0, s2 = 0;
+    assert(ac_prune_spent_one_time(a2, 2, NULL, &p2, &s2) == 1);
+    assert(a2[0].minute_of_day == 7 * 60);
+    assert(p2 == -1 && s2 == -1);
+
+    // A one-time alarm that is still ENABLED has a future and must survive -- this
+    // is a pending Test alarm, and pruning it would delete the alarm the user just
+    // asked for. Nothing may move when there is nothing spent.
+    Alarm keep[MAX_ALARMS] = {
+      { .minute_of_day = 7 * 60, .weekday_mask = 0x1F, .enabled = true },
+      { .minute_of_day = 61, .weekday_mask = 0, .enabled = true },
+    };
+    int8_t p3 = 1, s3 = 1;
+    assert(ac_prune_spent_one_time(keep, 2, NULL, &p3, &s3) == 2);
+    assert(keep[1].minute_of_day == 61);
+    assert(p3 == 1 && s3 == 1);
+
+    // A DISABLED REPEATING alarm is not spent -- it is switched off, and switching
+    // it back on must still be possible.
+    Alarm off[MAX_ALARMS] = {
+      { .minute_of_day = 7 * 60, .weekday_mask = 0x1F, .enabled = false },
+    };
+    assert(ac_prune_spent_one_time(off, 1, NULL, NULL, NULL) == 1);
+
+    // Degenerate inputs must not crash or invent alarms.
+    assert(ac_prune_spent_one_time(NULL, 3, NULL, NULL, NULL) == 3);
+    assert(ac_prune_spent_one_time(a2, 0, NULL, NULL, NULL) == 0);
+  }
+
   printf("test_alarm_calc: all assertions passed\n");
   return 0;
 }

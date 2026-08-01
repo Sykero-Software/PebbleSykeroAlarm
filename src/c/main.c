@@ -1842,6 +1842,28 @@ int main(void) {
     as_save_alarms(s_alarms, s_count);
   }
 
+  // Drop spent one-time alarms -- a one-time alarm switched off has no future, and
+  // nothing could delete the row: the watch has no delete, and the phone cannot
+  // remove a slot the watch's own Test alarm created without telling it (its next
+  // config is byte-identical to the last applied one, so ac_apply_set_if_changed
+  // rightly no-ops). Two such rows were stuck on the real watch (2026-08-01).
+  //
+  // AFTER the first-run seed above, never before: pruning an array down to empty
+  // would otherwise look like a fresh install and re-seed the demo alarms. The
+  // RunState slot references are remapped by the same call, because they are
+  // indices into the array being compacted.
+  {
+    int before = s_count;
+    s_count = ac_prune_spent_one_time(s_alarms, s_count, s_rs.missed,
+                                      &s_rs.pending_slot, &s_rs.served_slot);
+    if (s_count != before) {
+      APP_LOG(APP_LOG_LEVEL_INFO, "pruned %d spent one-time alarm(s)",
+              before - s_count);
+      as_save_alarms(s_alarms, s_count);
+      as_save_runstate(&s_rs);
+    }
+  }
+
   // Captures the same launch-wakeup data the pre-existing log line reported
   // (Task 6), plus the cookie itself so it can be dispatched to start_ring below
   // once the main window exists — a single read of the launch event instead of
