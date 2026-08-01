@@ -106,7 +106,7 @@ export const NUMERIC_KEYS = [
   'StopGesture',
 ];
 
-export const BOOL_KEYS = ['SmartEnabled', 'LightPulse', 'DstCheck', 'EscRampVib'];
+export const BOOL_KEYS = ['SmartEnabled', 'EscRampVib'];
 
 export function buildDict(settings: any): any {
   const dict: any = {};

@@ -156,7 +156,7 @@ test('every numeric-valued control (slider, or an all-numeric select) is in NUME
 });
 
 test('every toggle is in BOOL_KEYS', () => {
-  // Every toggle on this page (SmartEnabled, EscRampVib, LightPulse, DstCheck) is
+  // Every toggle on this page (SmartEnabled, EscRampVib) is
   // a real message key and must convert through BOOL_KEYS or the watch never
   // hears it. The per-alarm enabled flags are not toggles any more -- they are
   // buttons inside the alarmList component, folded into the AlarmSet string.
@@ -187,11 +187,10 @@ test('buildDict converts strings to ints and leaves AlarmSet a string', () => {
     SensPercentile: { value: '88' },
     SensMinutes: { value: '3' },
     WakeProfile: { value: '1' },
+    EscRampVib: { value: false },
     SnoozeMin: { value: '10' },
     SnoozeMax: { value: '5' },
     StopGesture: { value: '1' },
-    LightPulse: { value: true },
-    DstCheck: { value: false },
   };
   const dict = buildDict(settings);
   assert.strictEqual(dict.AlarmSet, '07:00|1111100');
@@ -200,7 +199,7 @@ test('buildDict converts strings to ints and leaves AlarmSet a string', () => {
   assert.strictEqual(dict.SensPercentile, 88);
   assert.strictEqual(dict.Sensitivity, 3);
   assert.strictEqual(dict.SmartEnabled, 1);
-  assert.strictEqual(dict.DstCheck, 0);
+  assert.strictEqual(dict.EscRampVib, 0);
   // a missing key is omitted rather than sent as NaN
   const sparse = buildDict({ AlarmList: { value: '06:00|0000000' } });
   assert.strictEqual(sparse.SmartWindowMin, undefined);

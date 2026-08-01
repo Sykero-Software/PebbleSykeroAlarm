@@ -267,8 +267,6 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   GET_INT(SnoozeMax, snooze_max);
   GET_INT(SnoozeRampOffsetS, snooze_ramp_offset_s);
   GET_INT(StopGesture, stop_gesture);
-  GET_BOOL(LightPulse, light_pulse);
-  GET_BOOL(DstCheck, dst_check);
   GET_BOOL(EscRampVib, esc_ramp_vib);
   if (changed) {
     as_save_config(&s_cfg);   // esc_clamp runs inside as_save_config
@@ -873,9 +871,7 @@ static void play_burst(const EscStep *s) {
   // This deliberately reverses the earlier "seconds not minutes of backlight"
   // trade: over a long ring the light is now on much of the time. That is the
   // accepted cost of a light that behaves like every other light on the watch.
-  if (s_cfg.light_pulse) {
-    light_enable_interaction();
-  }
+  light_enable_interaction();
 
 #ifdef PBL_SPEAKER
   if (s->volume > 0 && !speaker_is_muted()) {

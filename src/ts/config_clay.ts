@@ -137,10 +137,6 @@ export function buildConfig(): any[] {
       defaultValue: 100, min: 1, max: 100, step: 1, id: 'esc-volmax' },
     { type: 'slider', messageKey: 'EscCapS', label: 'Custom: give up after (s)',
       defaultValue: 900, min: 120, max: 3600, step: 30, id: 'esc-cap' },
-    { type: 'toggle', messageKey: 'LightPulse', label: 'Light up with each buzz',
-      defaultValue: true, id: 'light-pulse',
-      description: 'Lights the screen the way any button press does, for as long '
-                 + 'as your backlight setting says.' },
   ] });
 
   items.push({ type: 'section', items: [
@@ -172,13 +168,6 @@ export function buildConfig(): any[] {
       ],
       description: 'A single press only snoozes, so a half-asleep tap cannot '
                  + 'end the alarm.' },
-  ] });
-
-  items.push({ type: 'section', items: [
-    { type: 'heading', defaultValue: 'Other' },
-    { type: 'toggle', messageKey: 'DstCheck', label: 'Daily clock-change check',
-      defaultValue: true, id: 'dst-check',
-      description: 'Re-arms alarms after a daylight-saving change. Leave on.' },
   ] });
 
   items.push({ type: 'submit', defaultValue: 'Save' });

@@ -121,8 +121,6 @@ void as_load_config(Config *out) {
     out->snooze_max = 5;
     out->snooze_ramp_offset_s = 120;
     out->stop_gesture = STOP_TWO_TAP;
-    out->light_pulse = true;
-    out->dst_check = true;
     out->esc_ramp_vib = false;   // explicit: the flattened vibration is the default
   }
   esc_clamp(&out->esc);

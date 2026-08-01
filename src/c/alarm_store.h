@@ -23,8 +23,10 @@
 
 // Struct versions, bumped when a layout changes so a stale blob is discarded
 // rather than misread.
-// Bumped 2 -> 3: idle_exit_sec removed with the idle auto-exit feature itself
-// (2026-08-01 settings cleanup). sizeof(Config) shrinks, so the length check
+// Bumped 2 -> 3: idle_exit_sec, light_pulse and dst_check all removed in the
+// 2026-08-01 settings cleanup -- the first with its whole feature, the other two
+// hardcoded to their defaults (the backlight always follows the system setting,
+// the daily clock-change check is always on; its own help text said "leave on"). sizeof(Config) shrinks, so the length check
 // catches a stale blob here -- the version is bumped anyway, because relying on
 // a size change is exactly the assumption the note below shows to be unsafe.
 //
@@ -73,8 +75,6 @@ typedef struct {
   uint8_t  snooze_max;             // 0..20, 0 == unlimited
   uint16_t snooze_ramp_offset_s;   // seconds added to `elapsed` per snooze
   uint8_t  stop_gesture;           // STOP_*
-  bool     light_pulse;
-  bool     dst_check;
   // Off by default: full-strength vibration from the first burst. See
   // esc_flatten_ramp for why a gentle start is a hazard rather than a courtesy.
   bool     esc_ramp_vib;

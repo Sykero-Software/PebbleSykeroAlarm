@@ -194,9 +194,10 @@ bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
   }
 
   // PRIORITY 4 — the daily clock-shift check.
-  if (cfg->dst_check) {
-    sc_schedule(prv_next_dst_check(now), WC_DST);
-  }
+  // Unconditional since the 2026-08-01 cleanup: this re-arms every alarm after a
+  // daylight-saving change, and the setting that could switch it off told the user
+  // to leave it on. A wakeup slot is not scarce enough to make that a choice.
+  sc_schedule(prv_next_dst_check(now), WC_DST);
 
   // WC_REENTRY is deliberately NOT armed here: it is only wanted while a window
   // is actually open, and it is re-armed on every fire (see sc_arm_reentry).
