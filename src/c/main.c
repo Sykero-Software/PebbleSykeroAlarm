@@ -145,20 +145,22 @@ static void draw_phone_hint_header(GContext *gctx, const Layer *cell,
   draw_header_text(gctx, cell, "Set times in the phone app");
 }
 
-// "in 13 h", "in 45 min", "in 2 d". Hand-rolled formatting; no float maths.
-static void fmt_relative(time_t when, time_t now, char *out, size_t n) {
+// "13 h", "45 min", "2 d" -- BARE, with no "in " prefix, because the row composes
+// three different sentences from it ("in 23 h", "skip, in 1 d", "off") and a
+// baked-in prefix cannot be composed. Hand-rolled formatting; no float maths.
+static void fmt_delta(time_t when, time_t now, char *out, size_t n) {
   if (when == 0) {
-    snprintf(out, n, "off");
+    if (n > 0) out[0] = '\0';
     return;
   }
   long d = (long)(when - now);
   if (d < 0) d = 0;
   if (d < 60 * 60) {
-    snprintf(out, n, "in %ld min", d / 60);
+    snprintf(out, n, "%ld min", d / 60);
   } else if (d < 24 * 60 * 60) {
-    snprintf(out, n, "in %ld h", d / 3600);
+    snprintf(out, n, "%ld h", d / 3600);
   } else {
-    snprintf(out, n, "in %ld d", d / 86400);
+    snprintf(out, n, "%ld d", d / 86400);
   }
 }
 
@@ -441,23 +443,35 @@ static void list_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
   graphics_draw_text(gctx, t, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
       GRect(4, -2, b.size.w - 8, 26), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
 
-  // Right-hand markers: skip-next, missed, smart.
-  // 16, not 12: "skip " + "missed " + "~" is 13 chars plus the NUL, which a
-  // 12-byte buffer truncates to "skip miss" when an alarm is skipped AND missed
-  // AND smart is on. Safe but wrong on screen.
-  char marks[16];
+  // Right-hand markers: missed, smart. NOT skip -- that is a STATE, and it is
+  // spelled out in the subtitle now. A cryptic three-letter corner word is how the
+  // skip feature managed to be invisible in the first place.
+  char marks[12];
   marks[0] = '\0';
-  snprintf(marks, sizeof(marks), "%s%s%s",
-           a->skip_next ? "skip " : "",
+  snprintf(marks, sizeof(marks), "%s%s",
            s_rs.missed[ci->row] ? "missed " : "",
            (s_cfg.smart_enabled && PBL_IF_HEALTH_ELSE(1, 0)) ? "~" : "");
   graphics_draw_text(gctx, marks, fonts_get_system_font(FONT_KEY_GOTHIC_18),
       GRect(4, 0, b.size.w - 8, 22), GTextOverflowModeFill, GTextAlignmentRight, NULL);
 
-  char days[12], rel[16], sub[32];
+  // state[32]/sub[48], not smaller: "skip, in " plus a full-width delta is 25
+  // bytes and gcc bounds it at that, so a tighter buffer is a real truncation
+  // rather than a warning to silence.
+  char days[12], delta[16], state[32], sub[48];
   fmt_weekdays(a->weekday_mask, days, sizeof(days));
-  fmt_relative(next_armed_occurrence(ci->row), time(NULL), rel, sizeof(rel));
-  snprintf(sub, sizeof(sub), "%s  %s", days, a->enabled ? rel : "off");
+  fmt_delta(next_armed_occurrence(ci->row), time(NULL), delta, sizeof(delta));
+  // The state, in words, in ONE place. The relative time already accounts for a
+  // pending skip (ac_next_occurrence honours skip_next), so the row used to be
+  // correct and unexplained: the number jumped a day and only a corner marker
+  // said why.
+  if (!a->enabled) {
+    snprintf(state, sizeof(state), "off");
+  } else if (a->skip_next) {
+    snprintf(state, sizeof(state), "skip, in %s", delta);
+  } else {
+    snprintf(state, sizeof(state), "in %s", delta);
+  }
+  snprintf(sub, sizeof(sub), "%s  %s", days, state);
   graphics_draw_text(gctx, sub, fonts_get_system_font(FONT_KEY_GOTHIC_18),
       GRect(4, 20, b.size.w - 8, 22), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
 }
@@ -661,9 +675,9 @@ static void main_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
       if (slot < 0) {
         snprintf(sub, sizeof(sub), "none set");
       } else {
-        char rel[16];
-        fmt_relative(when, time(NULL), rel, sizeof(rel));
-        snprintf(sub, sizeof(sub), "next %s", rel);
+        char delta[16];
+        fmt_delta(when, time(NULL), delta, sizeof(delta));
+        snprintf(sub, sizeof(sub), "next in %s", delta);
       }
       menu_cell_basic_draw(gctx, cell, "Alarms", sub, NULL);
       break;
