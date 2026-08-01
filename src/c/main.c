@@ -476,26 +476,195 @@ static void list_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
       GRect(4, 20, b.size.w - 8, 22), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
 }
 
-// Short SELECT toggles the alarm; long SELECT skips its next occurrence. Both are
-// operational, not configuration — configuration stays on the phone.
+// --- The per-alarm action submenu ---------------------------------------------
+//
+// Opened by SELECT on an alarm row. It exists because two bare gestures (SELECT
+// = on/off, long SELECT = skip next) were undiscoverable: nothing on screen
+// mentioned either, and the first user pressed SELECT wanting the skip and
+// switched the alarm off instead. Long SELECT is gone; this is the only route,
+// and every row is written out.
+static Window    *s_act_window;
+static MenuLayer *s_act_menu;
+// The alarm this submenu acts on, held by IDENTITY rather than row index: a phone
+// config can arrive while the submenu is open and rebuild s_alarms
+// (ac_apply_set_if_changed), after which the index refers to a different alarm.
+// Same rule, same reason, as PebbleTuyaControl's find_light_by_id.
+static uint16_t s_act_minute;
+static uint8_t  s_act_mask;
+static AcAction s_act_actions[AC_MAX_ACTIONS];
+static int      s_act_count;
+
+// The slot currently holding the alarm this submenu opened on, or -1 if it is
+// gone. Never cached: resolving late is the entire point.
+static int act_resolve(void) {
+  for (int i = 0; i < s_count; i++) {
+    if (s_alarms[i].minute_of_day == s_act_minute
+        && s_alarms[i].weekday_mask == s_act_mask) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+// "Mon 07:50" -- the occurrence NAMED, so "next" never has to be worked out.
+// Three-letter ASCII weekday: Gothic has no typographic characters, and a
+// localised name would need a font this app cannot rely on.
+static void fmt_occurrence(time_t t, char *out, size_t n) {
+  static const char *k_wday[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+  if (t == 0) {
+    if (n > 0) out[0] = '\0';
+    return;
+  }
+  struct tm tm = *localtime(&t);
+  int wd = (tm.tm_wday >= 0 && tm.tm_wday < 7) ? tm.tm_wday : 0;
+  snprintf(out, n, "%s %02d:%02d", k_wday[wd], tm.tm_hour % 100, tm.tm_min % 100);
+}
+
+// The occurrence a skip would apply to, or that an undo would restore. `undo`
+// asks with skip_next cleared, which is the occurrence currently being skipped.
+// Both go through the same picker the list and the scheduler use, so the label
+// can never name a ring that will not happen.
+static time_t act_occurrence(int slot, bool undo) {
+  if (slot < 0 || slot >= s_count) {
+    return 0;
+  }
+  if (!undo) {
+    return next_armed_occurrence(slot);
+  }
+  Alarm probe = s_alarms[slot];
+  probe.skip_next = false;
+  time_t now = time(NULL);
+  int served = (s_rs.served_slot == (int8_t)slot) ? 0 : -1;
+  time_t when = 0;
+  ac_next_alarm_unserved(&probe, 1, now, served, (time_t)s_rs.served_at,
+                         (int32_t)(now - sc_ring_deadline(&s_cfg, now)), &when);
+  return when;
+}
+
+static uint16_t act_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
+  return (uint16_t)(s_act_count > 0 ? s_act_count : 1);
+}
+
+static int16_t act_cell_height(MenuLayer *ml, MenuIndex *ci, void *ctx) {
+  return 36;
+}
+
+// Titled with the alarm it acts on, so the submenu can never be about "whichever
+// row that was".
+static void act_draw_header(GContext *gctx, const Layer *cell, uint16_t section,
+                            void *ctx) {
+  int slot = act_resolve();
+  char title[28];
+  if (slot < 0) {
+    snprintf(title, sizeof(title), "Alarm gone");
+  } else {
+    char days[12];
+    fmt_weekdays(s_alarms[slot].weekday_mask, days, sizeof(days));
+    snprintf(title, sizeof(title), "%02u:%02u  %s",
+             (unsigned)(s_act_minute / 60) % 100u,
+             (unsigned)(s_act_minute % 60) % 100u, days);
+  }
+  draw_header_text(gctx, cell, title);
+}
+
+static void act_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void *ctx) {
+  GRect b = layer_get_bounds(cell);
+  graphics_context_set_text_color(gctx, menu_cell_layer_is_highlighted(cell)
+                                            ? GColorWhite : GColorBlack);
+  char label[28];
+  int slot = act_resolve();
+  if (slot < 0 || (int)ci->row >= s_act_count) {
+    snprintf(label, sizeof(label), "Back");
+  } else {
+    char occ[16];
+    switch (s_act_actions[ci->row]) {
+      case AC_ACTION_SKIP_NEXT:
+        fmt_occurrence(act_occurrence(slot, false), occ, sizeof(occ));
+        snprintf(label, sizeof(label), "Skip %s", occ);
+        break;
+      case AC_ACTION_RING_NEXT:
+        fmt_occurrence(act_occurrence(slot, true), occ, sizeof(occ));
+        snprintf(label, sizeof(label), "Ring %s", occ);
+        break;
+      case AC_ACTION_TURN_OFF: snprintf(label, sizeof(label), "Turn off"); break;
+      case AC_ACTION_TURN_ON:  snprintf(label, sizeof(label), "Turn on");  break;
+    }
+  }
+  graphics_draw_text(gctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_24),
+      GRect(6, 1, b.size.w - 12, b.size.h - 2),
+      GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+}
+
+static void act_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
+  idle_reset();
+  int slot = act_resolve();
+  if (slot < 0 || (int)ci->row >= s_act_count) {
+    // The alarm was reconfigured from the phone while this was open. Do nothing
+    // rather than act on whatever slid into that index.
+    APP_LOG(APP_LOG_LEVEL_WARNING, "action submenu: alarm gone, ignoring");
+    window_stack_pop(true);
+    return;
+  }
+  Alarm *a = &s_alarms[slot];
+  switch (s_act_actions[ci->row]) {
+    case AC_ACTION_SKIP_NEXT: a->skip_next = true;  break;
+    case AC_ACTION_RING_NEXT: a->skip_next = false; break;
+    case AC_ACTION_TURN_OFF:
+      a->enabled = false;
+      a->skip_next = false;   // an alarm that is off has nothing to skip
+      break;
+    case AC_ACTION_TURN_ON:   a->enabled = true;    break;
+  }
+  reload_and_rearm();
+  window_stack_pop(true);   // back to the list, which now shows the new state
+}
+
+static void act_window_load(Window *w) {
+  Layer *root = window_get_root_layer(w);
+  s_act_menu = menu_layer_create(layer_get_bounds(root));
+  menu_layer_set_callbacks(s_act_menu, NULL, (MenuLayerCallbacks){
+    .get_num_rows = act_num_rows,
+    .get_cell_height = act_cell_height,
+    .get_header_height = hint_header_height,
+    .draw_header = act_draw_header,
+    .draw_row = act_draw_row,
+    .select_click = act_select,
+  });
+  menu_layer_set_click_config_onto_window(s_act_menu, w);
+  layer_add_child(root, menu_layer_get_layer(s_act_menu));
+}
+
+static void act_window_unload(Window *w) {
+  menu_layer_destroy(s_act_menu);
+  s_act_menu = NULL;
+}
+
+static void open_alarm_actions(int row) {
+  if (row < 0 || row >= s_count) {
+    return;
+  }
+  s_act_minute = s_alarms[row].minute_of_day;
+  s_act_mask = s_alarms[row].weekday_mask;
+  s_act_count = ac_row_actions(&s_alarms[row], s_act_actions, AC_MAX_ACTIONS);
+  if (!s_act_window) {
+    s_act_window = window_create();
+    // Its own idle handlers: pushing this window makes the LIST disappear, which
+    // cancels the idle timer by this app's convention, so without them the app
+    // could sit open on this screen indefinitely.
+    window_set_window_handlers(s_act_window, (WindowHandlers){
+      .load = act_window_load, .unload = act_window_unload,
+      .appear = idle_win_appear, .disappear = idle_win_disappear,
+    });
+  }
+  window_stack_push(s_act_window, true);
+}
+
+// SELECT opens the action submenu. There is deliberately no second gesture: long
+// SELECT used to set skip-next and nothing on screen ever said so.
 static void list_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
   idle_reset();
   if (s_count == 0) return;
-  Alarm *a = &s_alarms[ci->row];
-  a->enabled = !a->enabled;
-  if (!a->enabled) {
-    a->skip_next = false;
-  }
-  reload_and_rearm();
-}
-
-static void list_select_long(MenuLayer *ml, MenuIndex *ci, void *ctx) {
-  idle_reset();
-  if (s_count == 0) return;
-  Alarm *a = &s_alarms[ci->row];
-  if (!a->enabled) return;
-  a->skip_next = !a->skip_next;
-  reload_and_rearm();
+  open_alarm_actions(ci->row);
 }
 
 static void list_window_load(Window *w) {
@@ -508,7 +677,6 @@ static void list_window_load(Window *w) {
     .draw_header = draw_phone_hint_header,
     .draw_row = list_draw_row,
     .select_click = list_select,
-    .select_long_click = list_select_long,
   });
   menu_layer_set_click_config_onto_window(s_list_menu, w);
   layer_add_child(root, menu_layer_get_layer(s_list_menu));
@@ -2013,6 +2181,7 @@ int main(void) {
   if (s_list_window) window_destroy(s_list_window);
   if (s_ring_window) window_destroy(s_ring_window);
   if (s_night_window) window_destroy(s_night_window);
+  if (s_act_window) window_destroy(s_act_window);
   window_destroy(s_main_window);
   return 0;
 }
