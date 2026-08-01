@@ -36,7 +36,6 @@ test('a saved dict round-trips exactly, values and types intact', () => {
     SmartEnabled: 1, SmartWindowMin: 30, TimeSemantics: 1,
     Sensitivity: 2, SensPercentile: 88, SensMinutes: 3,
     WakeProfile: 0, SnoozeMin: 9, SnoozeMax: 0,
-    StopGesture: 2,
   };
   saveDict(s.set, dict);
   const back = resendDict(s.get);

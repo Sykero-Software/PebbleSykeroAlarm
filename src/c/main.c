@@ -266,13 +266,12 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   GET_INT(SnoozeMin, snooze_min);
   GET_INT(SnoozeMax, snooze_max);
   GET_INT(SnoozeRampOffsetS, snooze_ramp_offset_s);
-  GET_INT(StopGesture, stop_gesture);
   GET_BOOL(EscRampVib, esc_ramp_vib);
   if (changed) {
     as_save_config(&s_cfg);   // esc_clamp runs inside as_save_config
-    APP_LOG(APP_LOG_LEVEL_INFO, "CFG updated: smart=%d win=%d sens=%d prof=%d gest=%d",
+    APP_LOG(APP_LOG_LEVEL_INFO, "CFG updated: smart=%d win=%d sens=%d prof=%d",
             (int)s_cfg.smart_enabled, s_cfg.smart_window_min, s_cfg.sensitivity,
-            s_cfg.wake_profile, s_cfg.stop_gesture);
+            s_cfg.wake_profile);
     reload_and_rearm();
   }
 }
@@ -893,20 +892,17 @@ static TextLayer *s_ring_sub;
 static TextLayer *s_ring_up;
 static TextLayer *s_ring_down;
 static TextLayer *s_ring_hint;
-static Layer     *s_ring_progress;
 
 static bool     s_ringing;
-static uint32_t s_hold_ms;          // long-press progress, 0..STOP_HOLD_MS
-static AppTimer *s_hold_timer;
 static AppTimer *s_hint_timer;
 
-#define STOP_HOLD_MS       2000
-// window_long_click_subscribe's own recognition delay: kept short so the
-// progress bar appears (already partly filled, at STOP_HOLD_DELAY_MS/
-// STOP_HOLD_MS) almost as soon as the button goes down, rather than only
-// after the full STOP_HOLD_MS -- which is what made a 2 s hold read as ~4 s
-// with zero feedback for the first half.
-#define STOP_HOLD_DELAY_MS 300
+// How many presses of the bottom button stop the alarm. Fixed at two since the
+// 2026-08-01 settings cleanup: a single press must never end an alarm (a
+// half-asleep hand finds one button by feel), and beyond that "two, three, or
+// hold it down" is a choice nobody needs to make. Dropping the choice also
+// removed the hold path, whose progress bar was the only drawing on the ring
+// screen that was not a TextLayer.
+#define STOP_PRESSES   2
 #define HINT_SHOW_MS   1500
 
 static uint32_t ring_elapsed_s(void) {
@@ -1072,7 +1068,6 @@ static void burst_cb(void *data) {
 static void stop_ring_output(void) {
   s_ringing = false;
   if (s_burst_timer) { app_timer_cancel(s_burst_timer); s_burst_timer = NULL; }
-  if (s_hold_timer)  { app_timer_cancel(s_hold_timer);  s_hold_timer = NULL; }
   // Without this, pressing DOWN once (showing the hint) then UP within
   // HINT_SHOW_MS leaves hint_hide_cb pending against a TextLayer that
   // ring_window_unload may since have destroyed.
@@ -1202,13 +1197,12 @@ static void show_press_again_hint(void) {
   if (!s_ring_hint || !s_ring_sub) {
     return;
   }
-  uint8_t need = (s_cfg.stop_gesture == STOP_THREE_TAP) ? 3 : 2;
   static char hint[24];
   // Plain ASCII "x", not the U+00D7 multiplication sign: GOTHIC_18_BOLD has no
   // glyph for it, so it rendered as a tofu box ("2<box> = Stop") on the actual
   // ring screen -- confirmed by pixel-zooming an emulator screenshot. This is
   // the one instruction a half-asleep user actually reads, so it must render.
-  snprintf(hint, sizeof(hint), "Press %dx to stop", need);
+  snprintf(hint, sizeof(hint), "Press %dx to stop", STOP_PRESSES);
   text_layer_set_text(s_ring_hint, hint);
   // The hint reuses the subtitle's exact slot (see ring_window_load) rather
   // than needing its own vertical room, which the 144x168 boards do not have
@@ -1223,8 +1217,7 @@ static void show_press_again_hint(void) {
 }
 
 static void ring_down_multi(ClickRecognizerRef rec, void *ctx) {
-  uint8_t need = (s_cfg.stop_gesture == STOP_THREE_TAP) ? 3 : 2;
-  if (click_number_of_clicks_counted(rec) >= need) {
+  if (click_number_of_clicks_counted(rec) >= STOP_PRESSES) {
     ring_stop_now();
   } else {
     // Without this the button is bound only to a multi-click and a single press
@@ -1232,45 +1225,6 @@ static void ring_down_multi(ClickRecognizerRef rec, void *ctx) {
     // slowly for the 400 ms window.
     show_press_again_hint();
   }
-}
-
-static void hold_tick_cb(void *data) {
-  s_hold_timer = NULL;
-  // Guarded for the same reason as update_ring_text (this task's review):
-  // stop_ring_output always cancels this timer before any path pops the ring
-  // window today, so it is not reachable stale in practice, but the ring
-  // window is no longer the only one this app can pop without exiting, so
-  // this stays consistent with that convention rather than relying on it.
-  if (!s_ringing || !s_ring_progress) {
-    return;
-  }
-  s_hold_ms += 100;
-  layer_mark_dirty(s_ring_progress);
-  if (s_hold_ms >= STOP_HOLD_MS) {
-    ring_stop_now();
-    return;
-  }
-  s_hold_timer = app_timer_register(100, hold_tick_cb, NULL);
-}
-
-static void ring_down_hold_start(ClickRecognizerRef rec, void *ctx) {
-  // The button has already been down for STOP_HOLD_DELAY_MS by the time this
-  // fires (that is what window_long_click_subscribe's delay_ms means), so the
-  // bar starts already partly filled instead of at 0% -- total real hold time
-  // to stop is still STOP_HOLD_MS from the physical press, not STOP_HOLD_MS
-  // AFTER this callback.
-  s_hold_ms = STOP_HOLD_DELAY_MS;
-  layer_set_hidden(s_ring_progress, false);
-  layer_mark_dirty(s_ring_progress);
-  if (s_hold_timer) app_timer_cancel(s_hold_timer);
-  s_hold_timer = app_timer_register(100, hold_tick_cb, NULL);
-}
-
-static void ring_down_hold_release(ClickRecognizerRef rec, void *ctx) {
-  if (s_hold_timer) { app_timer_cancel(s_hold_timer); s_hold_timer = NULL; }
-  s_hold_ms = 0;
-  layer_set_hidden(s_ring_progress, true);
-  layer_mark_dirty(s_ring_progress);
 }
 
 static void ring_up(ClickRecognizerRef rec, void *ctx) {
@@ -1284,25 +1238,10 @@ static void ring_noop(ClickRecognizerRef rec, void *ctx) {}
 
 static void ring_click_config(void *ctx) {
   window_single_click_subscribe(BUTTON_ID_UP, ring_up);
-  if (s_cfg.stop_gesture == STOP_LONG_PRESS) {
-    window_long_click_subscribe(BUTTON_ID_DOWN, STOP_HOLD_DELAY_MS,
-                                ring_down_hold_start, ring_down_hold_release);
-  } else {
-    uint8_t need = (s_cfg.stop_gesture == STOP_THREE_TAP) ? 3 : 2;
-    window_multi_click_subscribe(BUTTON_ID_DOWN, 1, need, 400, false, ring_down_multi);
-  }
+  window_multi_click_subscribe(BUTTON_ID_DOWN, 1, STOP_PRESSES, 400, false,
+                               ring_down_multi);
   window_single_click_subscribe(BUTTON_ID_BACK, ring_noop);
   window_single_click_subscribe(BUTTON_ID_SELECT, ring_noop);
-}
-
-static void progress_update(Layer *layer, GContext *gctx) {
-  GRect b = layer_get_bounds(layer);
-  // NIGHT_FG, not black: this bar sits on the ring screen, which is black. It was
-  // the one piece of drawing that does not go through a TextLayer, so it is also
-  // the one that would silently vanish.
-  graphics_context_set_fill_color(gctx, NIGHT_FG);
-  int w = (int)((uint32_t)b.size.w * s_hold_ms / STOP_HOLD_MS);
-  graphics_fill_rect(gctx, GRect(0, 0, w, b.size.h), 0, GCornerNone);
 }
 
 // Pick the largest of these three whose measured line-box height fits
@@ -1389,7 +1328,7 @@ static void ring_window_load(Window *w) {
   night_text_layer(s_ring_up);
   layer_add_child(root, text_layer_get_layer(s_ring_up));
 
-  // "Stop" is constant regardless of s_cfg.stop_gesture -- at either label
+  // "Stop" is constant -- at either label
   // size, "2x = Stop" would not fit as well as "Stop" alone, and which button
   // stops the alarm is all this label needs to say; the hint (multi-tap) or
   // the progress bar (long-press) teaches the gesture itself.
@@ -1428,16 +1367,10 @@ static void ring_window_load(Window *w) {
   layer_add_child(root, text_layer_get_layer(s_ring_hint));
   layer_set_hidden(text_layer_get_layer(s_ring_hint), true);
 
-  s_ring_progress = layer_create(GRect(0, b.size.h - 6, b.size.w, 6));
-  layer_set_update_proc(s_ring_progress, progress_update);
-  layer_add_child(root, s_ring_progress);
-  layer_set_hidden(s_ring_progress, true);
-
   update_ring_text();
 }
 
 static void ring_window_unload(Window *w) {
-  layer_destroy(s_ring_progress);     s_ring_progress = NULL;
   text_layer_destroy(s_ring_hint);    s_ring_hint = NULL;
   text_layer_destroy(s_ring_down);    s_ring_down = NULL;
   text_layer_destroy(s_ring_up);      s_ring_up = NULL;

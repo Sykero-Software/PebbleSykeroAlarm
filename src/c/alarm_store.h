@@ -26,7 +26,8 @@
 // Bumped 2 -> 3: idle_exit_sec, light_pulse and dst_check all removed in the
 // 2026-08-01 settings cleanup -- the first with its whole feature, the other two
 // hardcoded to their defaults (the backlight always follows the system setting,
-// the daily clock-change check is always on; its own help text said "leave on"). sizeof(Config) shrinks, so the length check
+// the daily clock-change check is always on; its own help text said "leave on"),
+// and stop_gesture went the same way -- two presses of the bottom button, always. sizeof(Config) shrinks, so the length check
 // catches a stale blob here -- the version is bumped anyway, because relying on
 // a size change is exactly the assumption the note below shows to be unsafe.
 //
@@ -56,10 +57,6 @@
 // SEMANTICS_* now live in alarm_calc.h, next to ac_ring_deadline/ac_window_start
 // which define what each one means (and which are host-tested for all three).
 
-#define STOP_LONG_PRESS  0
-#define STOP_TWO_TAP     1
-#define STOP_THREE_TAP   2
-
 // Everything the Clay page can set.
 typedef struct {
   uint8_t  version;
@@ -74,7 +71,6 @@ typedef struct {
   uint8_t  snooze_min;             // 1..30
   uint8_t  snooze_max;             // 0..20, 0 == unlimited
   uint16_t snooze_ramp_offset_s;   // seconds added to `elapsed` per snooze
-  uint8_t  stop_gesture;           // STOP_*
   // Off by default: full-strength vibration from the first burst. See
   // esc_flatten_ramp for why a gentle start is a hazard rather than a courtesy.
   bool     esc_ramp_vib;

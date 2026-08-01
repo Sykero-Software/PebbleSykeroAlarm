@@ -132,7 +132,7 @@ test('every numeric-valued control (slider, or an all-numeric select) is in NUME
   // silently drop it. Covering 'select' here (not just 'slider') closes the
   // hole a plain `numericTypes = new Set(['slider'])` check leaves: 8 of this
   // page's NUMERIC_KEYS (TimeSemantics, Sensitivity, SensMinutes,
-  // WakeProfile, SnoozeMin, SnoozeMax, StopGesture) are
+  // WakeProfile, SnoozeMin, SnoozeMax) are
   // select-typed, not sliders, and a select silently missing from
   // NUMERIC_KEYS is exactly the "silently dead control" bug class this
   // project has hit before (a sibling watchface shipped it).
@@ -190,7 +190,6 @@ test('buildDict converts strings to ints and leaves AlarmSet a string', () => {
     EscRampVib: { value: false },
     SnoozeMin: { value: '10' },
     SnoozeMax: { value: '5' },
-    StopGesture: { value: '1' },
   };
   const dict = buildDict(settings);
   assert.strictEqual(dict.AlarmSet, '07:00|1111100');

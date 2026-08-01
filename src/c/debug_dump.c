@@ -185,9 +185,9 @@ static void prv_dump_head(void) {
           (unsigned)s_cfg->sens_percentile, (unsigned)s_cfg->sens_minutes,
           (unsigned)s_cfg->wake_profile);
   APP_LOG(APP_LOG_LEVEL_INFO,
-          "DBG cfg2 snz=%u/%u off=%u stop=%u rampvib=%d v=%u",
+          "DBG cfg2 snz=%u/%u off=%u rampvib=%d v=%u",
           (unsigned)s_cfg->snooze_min, (unsigned)s_cfg->snooze_max,
-          (unsigned)s_cfg->snooze_ramp_offset_s, (unsigned)s_cfg->stop_gesture,
+          (unsigned)s_cfg->snooze_ramp_offset_s,
           (int)s_cfg->esc_ramp_vib, (unsigned)s_cfg->version);
 
   unsigned missed = 0;

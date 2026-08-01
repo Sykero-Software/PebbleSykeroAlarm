@@ -103,7 +103,6 @@ export const NUMERIC_KEYS = [
   'EscPulsesStart', 'EscPulsesMax', 'EscSoundAfterS', 'EscSoundRampS',
   'EscVolStart', 'EscVolMax', 'EscCapS',
   'SnoozeMin', 'SnoozeMax', 'SnoozeRampOffsetS',
-  'StopGesture',
 ];
 
 export const BOOL_KEYS = ['SmartEnabled', 'EscRampVib'];

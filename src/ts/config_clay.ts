@@ -159,15 +159,9 @@ export function buildConfig(): any[] {
       label: 'Each snooze starts this far along (s)',
       defaultValue: 120, min: 0, max: 600, step: 10, id: 'snooze-ramp',
       description: '0 restarts the ramp from the very beginning each time.' },
-    { type: 'select', messageKey: 'StopGesture', label: 'To stop the alarm',
-      defaultValue: '1', id: 'stop-gesture',
-      options: [
-        { label: 'Hold the bottom button', value: '0' },
-        { label: 'Press the bottom button twice', value: '1' },
-        { label: 'Press the bottom button three times', value: '2' },
-      ],
-      description: 'A single press only snoozes, so a half-asleep tap cannot '
-                 + 'end the alarm.' },
+    { type: 'text', defaultValue:
+        'Press the bottom button TWICE to stop the alarm. A single press only '
+      + 'snoozes, so a half-asleep tap cannot end it by accident.' },
   ] });
 
   items.push({ type: 'submit', defaultValue: 'Save' });
