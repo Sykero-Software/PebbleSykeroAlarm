@@ -51,11 +51,9 @@ bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
 // (Re)place the rolling re-entry wakeup SC_REENTRY_GAP_S from now.
 void sc_arm_reentry(time_t now);
 
-// When the ring must start at the latest for an alarm at `alarm_time`.
-// SEMANTICS_RING_STARTS: alarm_time itself.
-// SEMANTICS_AWAKE_BY:    alarm_time minus esc_full_development_s.
+// When the ring must start at the latest for an alarm at `alarm_time`, and when
+// its smart window opens. Thin wrappers that resolve Config + the platform's
+// Health availability and defer to ac_ring_deadline/ac_window_start, which are
+// pure and host-tested for all three semantics -- see alarm_calc.h.
 time_t sc_ring_deadline(const Config *cfg, time_t alarm_time);
-
-// When the smart window opens: sc_ring_deadline minus smart_window_min. Equals
-// sc_ring_deadline when the smart alarm is disabled or health is unavailable.
 time_t sc_window_start(const Config *cfg, time_t alarm_time);

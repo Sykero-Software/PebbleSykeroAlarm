@@ -307,6 +307,67 @@ int main(void) {
     }
   }
 
+  // --- ac_ring_deadline / ac_window_start: what the set time MEANS.
+  //
+  // Three modes, because "Ringing starts then" was read by a real user as "not
+  // before then" when it means "not after then" (2026-08-01). The mapping decides
+  // when an alarm actually goes off, so every mode is pinned here.
+  {
+    const time_t T = at(2026, 8, 1, 7, 50);
+    const uint16_t w = 30;
+    const uint32_t dev = 360;   // esc_full_development_s, Normal profile
+
+    // RING_LATEST: T is the LATEST. Window [T-30, T].
+    assert(ac_ring_deadline(SEMANTICS_RING_LATEST, true, w, dev, T) == T);
+    assert(ac_window_start(SEMANTICS_RING_LATEST, true, w, dev, T)
+           == at(2026, 8, 1, 7, 20));
+
+    // RING_FROM: T is the EARLIEST. Window [T, T+30], and the deadline is the far
+    // end -- the alarm still rings if no good moment is found, just late.
+    assert(ac_ring_deadline(SEMANTICS_RING_FROM, true, w, dev, T)
+           == at(2026, 8, 1, 8, 20));
+    assert(ac_window_start(SEMANTICS_RING_FROM, true, w, dev, T) == T);
+
+    // AWAKE_BY: the ramp must be fully developed by T, so it starts before it --
+    // and that is true whether or not the smart window is active.
+    assert(ac_ring_deadline(SEMANTICS_AWAKE_BY, true, w, dev, T) == T - (time_t)dev);
+    assert(ac_ring_deadline(SEMANTICS_AWAKE_BY, false, w, dev, T) == T - (time_t)dev);
+    assert(ac_window_start(SEMANTICS_AWAKE_BY, true, w, dev, T)
+           == T - (time_t)dev - (time_t)w * 60);
+
+    // With the window inactive (setting off, zero length, or no Health on the
+    // platform) every non-awake-by mode collapses to exactly the set time: "smart
+    // alarm off" must mean "rings when you said", under all of them.
+    assert(ac_ring_deadline(SEMANTICS_RING_LATEST, false, w, dev, T) == T);
+    assert(ac_window_start(SEMANTICS_RING_LATEST, false, w, dev, T) == T);
+    assert(ac_ring_deadline(SEMANTICS_RING_FROM, false, w, dev, T) == T);
+    assert(ac_window_start(SEMANTICS_RING_FROM, false, w, dev, T) == T);
+
+    // The window never opens after the deadline it belongs to -- sc_rearm only
+    // arms WC_WINDOW when win < ring, so a mode that broke this would silently
+    // lose its window rather than fail loudly.
+    for (int m = 0; m <= 2; m++) {
+      assert(ac_window_start((uint8_t)m, true, w, dev, T)
+             <= ac_ring_deadline((uint8_t)m, true, w, dev, T));
+    }
+
+    // The lead time sc_rearm derives (now - ring_deadline(now)) must round-trip
+    // through ac_is_served for every mode, including the NEGATIVE lead RING_FROM
+    // produces -- that is what keeps the double-ring fix working there.
+    {
+      Alarm daily = { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x7F,
+                      .enabled = true };
+      time_t when = 0;
+      const time_t ref = at(2026, 8, 1, 7, 0);
+      for (int m = 0; m <= 2; m++) {
+        int32_t lead_s = (int32_t)(ref - ac_ring_deadline((uint8_t)m, true, w, dev, ref));
+        time_t served = ac_ring_deadline((uint8_t)m, true, w, dev, T);
+        assert(ac_next_alarm_unserved(&daily, 1, ref, 0, served, lead_s, &when) == 0);
+        assert(when == at(2026, 8, 2, 7, 50));   // today's has rung: tomorrow's
+      }
+    }
+  }
+
   printf("test_alarm_calc: all assertions passed\n");
   return 0;
 }

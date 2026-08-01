@@ -39,23 +39,34 @@ void sc_cancel_all(void) {
   wakeup_cancel_all();
 }
 
-time_t sc_ring_deadline(const Config *cfg, time_t alarm_time) {
+// Resolve Config (and the platform's Health availability) into the parameters
+// the pure math takes, then defer to it. The health gate stays HERE because
+// PBL_IF_HEALTH_ELSE is an SDK macro and alarm_calc must compile on the host.
+static bool prv_window_active(const Config *cfg) {
+#if PBL_IF_HEALTH_ELSE(1, 0)
+  return cfg->smart_enabled && cfg->smart_window_min > 0;
+#else
+  return false;
+#endif
+}
+
+static uint32_t prv_full_dev_s(const Config *cfg) {
   if (cfg->time_semantics != SEMANTICS_AWAKE_BY) {
-    return alarm_time;
+    return 0;   // nothing else reads it; skip resolving the profile
   }
   EscParams e;
   as_effective_esc(cfg, &e);
-  return alarm_time - (time_t)esc_full_development_s(&e);
+  return esc_full_development_s(&e);
+}
+
+time_t sc_ring_deadline(const Config *cfg, time_t alarm_time) {
+  return ac_ring_deadline(cfg->time_semantics, prv_window_active(cfg),
+                          cfg->smart_window_min, prv_full_dev_s(cfg), alarm_time);
 }
 
 time_t sc_window_start(const Config *cfg, time_t alarm_time) {
-  time_t ring = sc_ring_deadline(cfg, alarm_time);
-#if PBL_IF_HEALTH_ELSE(1, 0)
-  if (cfg->smart_enabled && cfg->smart_window_min > 0) {
-    return ring - (time_t)cfg->smart_window_min * SECONDS_PER_MINUTE;
-  }
-#endif
-  return ring;
+  return ac_window_start(cfg->time_semantics, prv_window_active(cfg),
+                         cfg->smart_window_min, prv_full_dev_s(cfg), alarm_time);
 }
 
 void sc_arm_reentry(time_t now) {
@@ -91,11 +102,14 @@ bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
 
   time_t alarm_when = 0;
   // The lead time between an occurrence and the instant its ring must start: 0
-  // under SEMANTICS_RING_STARTS, the escalation's full development under
-  // SEMANTICS_AWAKE_BY. Derived FROM sc_ring_deadline rather than recomputed, so
-  // that function stays the single owner of the semantics; the difference does
-  // not depend on which occurrence it is asked about, so `now` serves as the
-  // reference.
+  // under SEMANTICS_RING_LATEST, the escalation's full development under
+  // SEMANTICS_AWAKE_BY, and NEGATIVE (minus the window) under SEMANTICS_RING_FROM,
+  // whose deadline sits after the alarm time. Signed on purpose -- ac_is_served
+  // subtracts it, so the negative case still compares like for like (occurrence +
+  // window against a served deadline of occurrence + window). Derived FROM
+  // sc_ring_deadline rather than recomputed, so that function stays the single
+  // owner of the semantics; the difference does not depend on which occurrence it
+  // is asked about, so `now` serves as the reference.
   int32_t lead_s = (int32_t)(now - sc_ring_deadline(cfg, now));
   // ...unserved: an occurrence that already rang must never be armed again. A
   // smart window can ring at 07:20 for a 07:50 alarm, and then "the next

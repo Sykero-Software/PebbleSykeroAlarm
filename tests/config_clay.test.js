@@ -25,6 +25,29 @@ test('every settable key appears exactly once', () => {
   }
 });
 
+test('TimeSemantics offers all three modes, and says which way each moves', () => {
+  // The C side reads this as SEMANTICS_RING_LATEST(0) / AWAKE_BY(1) /
+  // RING_FROM(2). A value that is not one of those falls through
+  // ac_ring_deadline's default and silently becomes "the latest", so a typo here
+  // is invisible on the watch. The wording matters as much as the values: the
+  // two-option version said "Ringing starts then", which a real user read as
+  // "not before then" when it means the opposite, and got woken 30 minutes early
+  // (2026-08-01). Each label must therefore state which direction the smart
+  // window can move the ring.
+  const sem = byKey.get('TimeSemantics');
+  assert.ok(sem, 'TimeSemantics missing from the config page');
+  const values = sem.options.map((o) => o.value).sort();
+  assert.deepStrictEqual(values, ['0', '1', '2']);
+  const latest = sem.options.find((o) => o.value === '0').label;
+  const from = sem.options.find((o) => o.value === '2').label;
+  assert.match(latest, /earlier/i);
+  assert.match(from, /later/i);
+  // ... and the description must show both ends of a concrete example, since the
+  // label alone cannot express "07:20 to 07:50".
+  assert.match(sem.description, /07:20/);
+  assert.match(sem.description, /08:20/);
+});
+
 test('every checkboxgroup option is a plain STRING', () => {
   // Clay's checkboxgroup template renders each option with {{{this}}} and its
   // README specifies "options | array of strings". A {label, value} object

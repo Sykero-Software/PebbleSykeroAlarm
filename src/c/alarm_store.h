@@ -46,8 +46,8 @@
 #define SENS_HIGH     2
 #define SENS_CUSTOM   3
 
-#define SEMANTICS_RING_STARTS  0
-#define SEMANTICS_AWAKE_BY     1
+// SEMANTICS_* now live in alarm_calc.h, next to ac_ring_deadline/ac_window_start
+// which define what each one means (and which are host-tested for all three).
 
 #define STOP_LONG_PRESS  0
 #define STOP_TWO_TAP     1

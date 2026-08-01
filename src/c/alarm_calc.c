@@ -100,6 +100,37 @@ int ac_next_alarm(const Alarm *alarms, int count, time_t now, time_t *out_when) 
   return best;
 }
 
+time_t ac_ring_deadline(uint8_t semantics, bool smart_window_active,
+                        uint16_t window_min, uint32_t full_dev_s,
+                        time_t alarm_time) {
+  if (semantics == SEMANTICS_AWAKE_BY) {
+    // Independent of the window: the ramp has to START early enough to be at
+    // full strength by the set time, window or no window.
+    return alarm_time - (time_t)full_dev_s;
+  }
+  if (semantics == SEMANTICS_RING_FROM && smart_window_active) {
+    // The set time is the EARLIEST, so the hard deadline is the far end of the
+    // window -- and it is a real deadline: if no good moment is found in there,
+    // the alarm still rings, just late rather than early.
+    return alarm_time + (time_t)window_min * 60;
+  }
+  return alarm_time;
+}
+
+time_t ac_window_start(uint8_t semantics, bool smart_window_active,
+                       uint16_t window_min, uint32_t full_dev_s,
+                       time_t alarm_time) {
+  time_t ring = ac_ring_deadline(semantics, smart_window_active, window_min,
+                                 full_dev_s, alarm_time);
+  if (!smart_window_active) {
+    return ring;
+  }
+  if (semantics == SEMANTICS_RING_FROM) {
+    return alarm_time;
+  }
+  return ring - (time_t)window_min * 60;
+}
+
 bool ac_is_served(time_t when, int slot, int served_slot, time_t served_at,
                   int32_t lead_s) {
   return served_slot >= 0 && slot == served_slot && when != 0

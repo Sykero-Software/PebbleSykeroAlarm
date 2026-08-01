@@ -20,6 +20,22 @@
 
 #define MAX_ALARMS 8
 
+// What the time the user set actually MEANS. These live here, with the alarm time
+// math that consumes them, rather than in alarm_store.h with the rest of Config:
+// ac_ring_deadline/ac_window_start below are the definition of each mode, and a
+// pure module cannot include alarm_store.h (which includes this one).
+//
+// RING_LATEST is the historical default and was labelled "Ringing starts then",
+// which a real user reasonably read as "not before then" -- it means the
+// opposite, "not after then", and the smart window only ever moves the ring
+// EARLIER. RING_FROM is that other reading, added 2026-08-01 because the label
+// was genuinely ambiguous and both behaviours are legitimate.
+#define SEMANTICS_RING_LATEST  0   // window [T - w, T]; ring at T at the latest
+#define SEMANTICS_AWAKE_BY     1   // full escalation developed by T
+#define SEMANTICS_RING_FROM    2   // window [T, T + w]; never ring before T
+// The old spelling, kept so nothing silently changes meaning mid-refactor.
+#define SEMANTICS_RING_STARTS  SEMANTICS_RING_LATEST
+
 // One alarm slot. weekday_mask bit0=Monday … bit6=Sunday; 0 means a one-time
 // alarm (fires at the next occurrence of minute_of_day, then is disabled by the
 // caller). skip_next makes the *next* occurrence be skipped exactly once.
@@ -84,6 +100,27 @@ bool ac_is_served(time_t when, int slot, int served_slot, time_t served_at,
 int ac_next_alarm_unserved(const Alarm *alarms, int count, time_t now,
                            int served_slot, time_t served_at, int32_t lead_s,
                            time_t *out_when);
+
+// When the ring must start AT THE LATEST for an alarm set to `alarm_time`, and
+// when its smart window opens. Pure, so all three modes are host-tested: this is
+// the mapping that decides when an alarm actually goes off, and it has now been
+// misread once by a user and once (as SEMANTICS_AWAKE_BY vs an imminent alarm) by
+// the code itself.
+//
+// `smart_window_active` must already fold in everything that can disable the
+// window -- the setting, a zero length, and whether the platform has Health at
+// all -- so this stays free of SDK macros. `full_dev_s` is
+// esc_full_development_s for the effective profile; it is only read by
+// SEMANTICS_AWAKE_BY.
+//
+// With the window inactive every mode collapses to `alarm_time`, which is what
+// makes "smart alarm off" mean "rings exactly when you said" under all three.
+time_t ac_ring_deadline(uint8_t semantics, bool smart_window_active,
+                        uint16_t window_min, uint32_t full_dev_s,
+                        time_t alarm_time);
+time_t ac_window_start(uint8_t semantics, bool smart_window_active,
+                       uint16_t window_min, uint32_t full_dev_s,
+                       time_t alarm_time);
 
 // Parse the packed AlarmSet wire format into out[]:
 //     "07:00|1111100;-08:30|0000011"

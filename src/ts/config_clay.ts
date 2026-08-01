@@ -37,21 +37,29 @@ export function buildConfig(): any[] {
       + 'Not available on Pebble Classic / Steel.' },
     { type: 'toggle', messageKey: 'SmartEnabled', label: 'Smart alarm',
       defaultValue: true, id: 'smart-on' },
-    { type: 'select', messageKey: 'SmartWindowMin', label: 'Look back at most',
+    { type: 'select', messageKey: 'SmartWindowMin', label: 'Smart window length',
       defaultValue: '30', id: 'smart-window',
       options: [
         { label: '10 min', value: '10' }, { label: '15 min', value: '15' },
         { label: '20 min', value: '20' }, { label: '30 min', value: '30' },
         { label: '45 min', value: '45' }, { label: '60 min', value: '60' },
       ] },
-    { type: 'select', messageKey: 'TimeSemantics', label: 'The alarm time means',
+    // Three modes, spelled out with both ends of each window, because the old
+    // two-option wording ("Ringing starts then") was read as "not before then"
+    // when it meant the opposite. Say which direction the window moves the ring.
+    { type: 'select', messageKey: 'TimeSemantics', label: 'The alarm time is',
       defaultValue: '0', id: 'smart-semantics',
       options: [
-        { label: 'Ringing starts then', value: '0' },
-        { label: 'Awake by then', value: '1' },
+        { label: 'The latest — may ring earlier', value: '0' },
+        { label: 'The earliest — may ring later', value: '2' },
+        { label: 'When I must be fully awake', value: '1' },
       ],
-      description: '"Awake by then" starts the ramp early enough to be at full '
-                 + 'strength by the set time.' },
+      description: 'With a 30 min window and a 07:50 alarm: '
+                 + '"the latest" rings between 07:20 and 07:50; '
+                 + '"the earliest" never rings before 07:50 and rings by 08:20; '
+                 + '"fully awake" starts the ramp early enough to be at full '
+                 + 'strength at 07:50. Switching the smart alarm off makes all '
+                 + 'three ring at exactly 07:50.' },
     { type: 'select', messageKey: 'Sensitivity', label: 'Sensitivity',
       defaultValue: '1', id: 'smart-sens',
       options: [

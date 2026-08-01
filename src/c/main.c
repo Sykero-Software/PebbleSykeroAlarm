@@ -907,6 +907,16 @@ static void burst_cb(void *data) {
     if (s_rs.pending_slot >= 0 && s_rs.pending_slot < MAX_ALARMS) {
       s_rs.missed[s_rs.pending_slot] = true;
     }
+    // A ONE-TIME alarm has now had its one time, whether or not anyone dismissed
+    // it. Only ring_stop_now used to switch it off, so an alarm that ran to the
+    // cap stayed armed and rang again the next day -- found on the watch
+    // 2026-08-01, where a 00:00 test alarm from the previous night was still
+    // enabled and due to ring again. The `missed` marker is deliberately left
+    // set: the user should still see that it went unanswered.
+    if (s_rs.pending_slot >= 0 && s_rs.pending_slot < s_count
+        && s_alarms[s_rs.pending_slot].weekday_mask == 0) {
+      s_alarms[s_rs.pending_slot].enabled = false;
+    }
     vibes_cancel();
 #ifdef PBL_SPEAKER
     speaker_stop();
