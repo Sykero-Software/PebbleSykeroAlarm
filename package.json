@@ -1,6 +1,6 @@
 {
   "name": "sykero-smart-alarm",
-  "author": "Sykerö Software",
+  "author": "Syker\u00f6 Software",
   "version": "1.0.0",
   "keywords": [
     "pebble-app"
@@ -51,8 +51,6 @@
       "StopGesture",
       "LightPulse",
       "DstCheck",
-      "IdleExitSec",
-      "CfgOpen",
       "CfgRequest",
       "EscRampVib"
     ],

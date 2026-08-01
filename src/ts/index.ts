@@ -103,7 +103,7 @@ export const NUMERIC_KEYS = [
   'EscPulsesStart', 'EscPulsesMax', 'EscSoundAfterS', 'EscSoundRampS',
   'EscVolStart', 'EscVolMax', 'EscCapS',
   'SnoozeMin', 'SnoozeMax', 'SnoozeRampOffsetS',
-  'StopGesture', 'IdleExitSec',
+  'StopGesture',
 ];
 
 export const BOOL_KEYS = ['SmartEnabled', 'LightPulse', 'DstCheck', 'EscRampVib'];
@@ -144,18 +144,8 @@ export function buildDict(settings: any): any {
   return dict;
 }
 
-// Pauses/resumes the watch's idle auto-exit around the config page (Task 13):
-// without this, the idle timer could fire while the config webview is open and
-// pop the app's window stack out from under the user, closing the config page
-// on them.
-function sendCfgOpen(open: boolean): void {
-  Pebble.sendAppMessage({ CfgOpen: open ? 1 : 0 },
-    function () {}, function () {});
-}
-
 if (typeof Pebble !== 'undefined') {
   Pebble.addEventListener('showConfiguration', function () {
-    sendCfgOpen(true);
     // Before generateUrl(), which bakes clay-settings into the page: the seed has
     // to be in the store by the time the page is built, or the first open of the
     // list would show defaultValue and saving would wipe the user's other alarms.
@@ -166,7 +156,6 @@ if (typeof Pebble !== 'undefined') {
   });
 
   Pebble.addEventListener('webviewclosed', function (e: any) {
-    sendCfgOpen(false);
     if (!e || !e.response) {
       return;
     }

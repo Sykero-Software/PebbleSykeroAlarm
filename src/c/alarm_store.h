@@ -23,13 +23,18 @@
 
 // Struct versions, bumped when a layout changes so a stale blob is discarded
 // rather than misread.
+// Bumped 2 -> 3: idle_exit_sec removed with the idle auto-exit feature itself
+// (2026-08-01 settings cleanup). sizeof(Config) shrinks, so the length check
+// catches a stale blob here -- the version is bumped anyway, because relying on
+// a size change is exactly the assumption the note below shows to be unsafe.
+//
 // Bumped 1 -> 2: Config gained esc_ramp_vib. The size check in as_load_config is
 // NOT enough on its own here -- a trailing bool lands in the struct's existing tail
 // padding (alignment 2, from the uint16_t members), so sizeof(Config) is unchanged
 // and a stale v1 blob would pass the length test and be read through the new
 // layout. The version is what discards it; the phone's launch handshake then
 // re-applies the user's real settings.
-#define CONFIG_VERSION    2
+#define CONFIG_VERSION    3
 // Bumped 1 -> 2: RunState gained served_slot/served_at, the record of which alarm
 // occurrence has already rung. sizeof(RunState) changes, so as_load_runstate's
 // length check would discard a stale blob on its own; the bump states the intent
@@ -70,7 +75,6 @@ typedef struct {
   uint8_t  stop_gesture;           // STOP_*
   bool     light_pulse;
   bool     dst_check;
-  uint8_t  idle_exit_sec;          // 0 == off
   // Off by default: full-strength vibration from the first burst. See
   // esc_flatten_ramp for why a gentle start is a hazard rather than a courtesy.
   bool     esc_ramp_vib;

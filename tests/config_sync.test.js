@@ -36,7 +36,7 @@ test('a saved dict round-trips exactly, values and types intact', () => {
     SmartEnabled: 1, SmartWindowMin: 30, TimeSemantics: 1,
     Sensitivity: 2, SensPercentile: 88, SensMinutes: 3,
     WakeProfile: 0, SnoozeMin: 9, SnoozeMax: 0,
-    StopGesture: 2, LightPulse: 0, DstCheck: 1, IdleExitSec: 15,
+    StopGesture: 2, LightPulse: 0, DstCheck: 1,
   };
   saveDict(s.set, dict);
   const back = resendDict(s.get);
@@ -83,17 +83,15 @@ test('an empty alarm set IS a legitimate saved value (all alarms off)', () => {
   assert.strictEqual(back.AlarmSet, '');
 });
 
-test('the reply never carries CfgOpen or CfgRequest back to the watch', () => {
+test('the reply never carries CfgRequest back to the watch', () => {
   const s = store();
-  // buildDict produces neither; assert it stays that way, since echoing
-  // CfgOpen=1 would pause the watch's idle auto-exit forever and echoing
-  // CfgRequest would invite a reply loop.
+  // buildDict must not produce it: echoing CfgRequest would invite a reply loop.
+  // (CfgOpen was removed with the idle auto-exit it existed to pause -- it is no
+  // longer a message key at all, so there is nothing left to assert about it.)
   const { buildDict } = require('../src/pkjs/index.js');
   const dict = buildDict({});
-  assert.strictEqual(dict.CfgOpen, undefined);
   assert.strictEqual(dict.CfgRequest, undefined);
   saveDict(s.set, dict);
   const back = resendDict(s.get);
-  assert.strictEqual(back.CfgOpen, undefined);
   assert.strictEqual(back.CfgRequest, undefined);
 });

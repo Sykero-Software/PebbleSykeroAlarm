@@ -176,14 +176,6 @@ export function buildConfig(): any[] {
 
   items.push({ type: 'section', items: [
     { type: 'heading', defaultValue: 'Other' },
-    { type: 'select', messageKey: 'IdleExitSec',
-      label: 'Return to the watchface when idle', defaultValue: '15',
-      id: 'idle-exit',
-      options: [
-        { label: 'Off', value: '0' }, { label: '10 s', value: '10' },
-        { label: '15 s', value: '15' }, { label: '30 s', value: '30' },
-        { label: '60 s', value: '60' },
-      ] },
     { type: 'toggle', messageKey: 'DstCheck', label: 'Daily clock-change check',
       defaultValue: true, id: 'dst-check',
       description: 'Re-arms alarms after a daylight-saving change. Leave on.' },

@@ -35,72 +35,11 @@ static void close_to_watchface(void) {
   window_stack_pop_all(true);
 }
 
-// --- Idle auto-exit: matches the other four Sykerö watchapps. Armed only on
-// the main menu and the alarm list (their .appear/.disappear below); never
-// while a ring-family window is on screen, and never while the phone's config
-// page is open. "Ring-family window on screen" is checked directly against the
-// window stack (see idle_reset), NOT inferred from s_ringing/window_started_at
-// alone -- burst_cb's over_cap branch clears s_ringing while deliberately
-// leaving the ring window up (the intentionally non-dismissible "Alarm missed"
-// screen), so a flag-only guard has a gap there.
-//
-// s_ringing/s_ring_window/s_wait_window's one real (still-tentative-at-file-
-// scope) definitions are further down in the ring/smart-window sections -- this
-// is the same forward-reference pattern the file already uses for
-// s_last_eval/s_last_read (see the comment there): only one of the two
-// tentative definitions may carry an initializer, and neither does, so this is
-// legal C and not a redefinition.
-static bool    s_ringing;
-static Window *s_ring_window;
-static Window *s_wait_window;
-
-static AppTimer *s_idle_timer;
-static bool      s_cfg_open;    // the phone's config page is open
-
-static void idle_fire(void *data) {
-  s_idle_timer = NULL;
-  APP_LOG(APP_LOG_LEVEL_INFO, "IDLE exit");
-  close_to_watchface();
-}
-
-static void idle_cancel(void) {
-  if (s_idle_timer) {
-    app_timer_cancel(s_idle_timer);
-    s_idle_timer = NULL;
-  }
-}
-
-static void idle_reset(void) {
-  idle_cancel();
-  // s_ringing/window_started_at are a cheap fast path (true for most callers,
-  // since idle_reset is only ever called from the two safe windows or from an
-  // inbox message) but are NOT sufficient on their own: over_cap clears
-  // s_ringing while leaving the ring window up, and window_started_at is
-  // already 0 throughout any ring (start_ring zeroes it on entry). The
-  // window_stack_contains_window checks are what make "never while a ring or
-  // smart-wait screen is showing" true in EVERY on-screen state, including the
-  // post-over_cap "Alarm missed" screen and any future one -- reachable here via
-  // the CfgOpen-close and IdleExitSec-changed paths in inbox_received, which run
-  // regardless of what is on top of the window stack. And never while the
-  // phone's config page is open -- that would make the config page close
-  // itself under the user.
-  if (s_cfg.idle_exit_sec == 0 || s_cfg_open
-      || s_ringing || s_rs.window_started_at != 0
-      || (s_ring_window && window_stack_contains_window(s_ring_window))
-      || (s_wait_window && window_stack_contains_window(s_wait_window))) {
-    return;
-  }
-  s_idle_timer = app_timer_register((uint32_t)s_cfg.idle_exit_sec * 1000,
-                                    idle_fire, NULL);
-}
-
-// Window .appear/.disappear wrappers: armed only on the main menu and the
-// alarm list (Step 2). Deliberately NOT added to the ring window or the smart
-// waiting window -- pushing either of those already makes this window
-// disappear, which cancels the timer for free (the same pattern the sibling
-// apps use), and the ring/waiting screens must never time out on their own.
-static void idle_win_appear(Window *w) { idle_reset(); }
-static void idle_win_disappear(Window *w) { idle_cancel(); }
+// A tentative definition, so reload_and_rearm (above the ring section) can read
+// the live "an alarm is ringing right now" flag. Its one real definition is
+// further down with the rest of the ring state; only one of two tentative
+// definitions may carry an initializer and neither does, so this is legal C.
+static bool s_ringing;
 
 // "MTWTF--" style; '-' for days the alarm does not repeat. A one-time alarm
 // (mask 0) renders as "once".
@@ -274,37 +213,7 @@ static void runstate_begin_cycle(int slot, time_t window_start, time_t deadline,
     if (tt) { s_cfg.field = tt->value->int32 != 0; changed = true; } \
   } while (0)
 
-// Clay's default auto-send can deliver a `select` (IdleExitSec is one) as a
-// CString tuple rather than an int -- a plain tt->value->int32 read (as
-// GET_INT does) would misread its bytes as garbage in that case. Type-tolerant,
-// matching the sibling apps' idle_read_seconds(Tuple*) exactly: a hand-rolled
-// digit loop, never atoi/strtol/strtod (not exported by the Core firmware --
-// they link and run on host/emulator but hard-fault on real hardware).
-static int idle_read_seconds(Tuple *t) {
-  if (!t) { return -1; }
-  if (t->type == TUPLE_CSTRING) {
-    int v = 0;
-    const char *p = t->value->cstring;
-    while (*p >= '0' && *p <= '9') { v = v * 10 + (*p++ - '0'); }
-    return v;
-  }
-  return (int)t->value->int32;
-}
-
 static void inbox_received(DictionaryIterator *iter, void *context) {
-  // Handled before every other key (Task 13): the phone's config-page open/close
-  // signal must gate the idle timer regardless of what else is in this message.
-  Tuple *co = dict_find(iter, MESSAGE_KEY_CfgOpen);
-  if (co) {
-    s_cfg_open = co->value->int32 != 0;
-    APP_LOG(APP_LOG_LEVEL_INFO, "CfgOpen=%d", (int)s_cfg_open);
-    if (s_cfg_open) {
-      idle_cancel();
-    } else {
-      idle_reset();
-    }
-  }
-
   Tuple *t = dict_find(iter, MESSAGE_KEY_AlarmSet);
   if (t) {
     // A CString tuple is not guaranteed NUL-terminated at the buffer end; copy
@@ -361,15 +270,6 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   GET_BOOL(LightPulse, light_pulse);
   GET_BOOL(DstCheck, dst_check);
   GET_BOOL(EscRampVib, esc_ramp_vib);
-  {
-    Tuple *iet = dict_find(iter, MESSAGE_KEY_IdleExitSec);
-    int isec = idle_read_seconds(iet);
-    if (isec >= 0) {
-      s_cfg.idle_exit_sec = (uint8_t)isec;
-      changed = true;
-      idle_reset();   // apply the new duration immediately, same as the sibling apps
-    }
-  }
   if (changed) {
     as_save_config(&s_cfg);   // esc_clamp runs inside as_save_config
     APP_LOG(APP_LOG_LEVEL_INFO, "CFG updated: smart=%d win=%d sens=%d prof=%d gest=%d",
@@ -619,7 +519,6 @@ static void act_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void 
 }
 
 static void act_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
-  idle_reset();
   int slot = act_resolve();
   if (slot < 0 || (int)ci->row >= s_act_count) {
     // The alarm was reconfigured from the phone while this was open. Do nothing
@@ -676,7 +575,6 @@ static void open_alarm_actions(int row) {
     // could sit open on this screen indefinitely.
     window_set_window_handlers(s_act_window, (WindowHandlers){
       .load = act_window_load, .unload = act_window_unload,
-      .appear = idle_win_appear, .disappear = idle_win_disappear,
     });
   }
   window_stack_push(s_act_window, true);
@@ -685,7 +583,6 @@ static void open_alarm_actions(int row) {
 // SELECT opens the action submenu. There is deliberately no second gesture: long
 // SELECT used to set skip-next and nothing on screen ever said so.
 static void list_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
-  idle_reset();
   if (s_count == 0) return;
   open_alarm_actions(ci->row);
 }
@@ -715,7 +612,6 @@ static void open_alarm_list(void) {
     s_list_window = window_create();
     window_set_window_handlers(s_list_window, (WindowHandlers){
       .load = list_window_load, .unload = list_window_unload,
-      .appear = idle_win_appear, .disappear = idle_win_disappear,
     });
   }
   window_stack_push(s_list_window, true);
@@ -844,7 +740,6 @@ static void open_last_night(void) {
       // user who opens it and walks away must be returned to the watchface too
       // -- the brief only named the two windows it happened to introduce, not
       // every safe one that should get this.
-      .appear = idle_win_appear, .disappear = idle_win_disappear,
     });
   }
   window_stack_push(s_night_window, true);
@@ -904,7 +799,6 @@ static void add_test_alarm(void) {
 }
 
 static void main_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
-  idle_reset();
   switch (ci->row) {
     case MAIN_ROW_ALARMS:     open_alarm_list(); break;
     case MAIN_ROW_LAST_NIGHT: open_last_night(); break;
@@ -2136,7 +2030,6 @@ int main(void) {
   s_main_window = window_create();
   window_set_window_handlers(s_main_window, (WindowHandlers){
     .load = main_window_load, .unload = main_window_unload,
-    .appear = idle_win_appear, .disappear = idle_win_disappear,
   });
   window_stack_push(s_main_window, true);
 
