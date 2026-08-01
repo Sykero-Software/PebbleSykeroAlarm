@@ -142,6 +142,27 @@ time_t ac_window_start(uint8_t semantics, bool smart_window_active,
 int ac_prune_spent_one_time(Alarm *alarms, int count, bool *missed,
                             int8_t *pending_slot, int8_t *served_slot);
 
+// What the alarm list's per-row submenu offers, in display order.
+//
+// This is the app's answer to a UX defect, not a convenience: the list shipped
+// with SELECT toggling on/off and long SELECT setting skip-next, neither of them
+// mentioned anywhere on screen, and the first user pressed SELECT expecting the
+// skip and switched the alarm off instead. The rows are state-dependent because a
+// menu that offers an action the alarm is already in cannot be told from a broken
+// button.
+typedef enum {
+  AC_ACTION_SKIP_NEXT = 0,   // set skip_next   -- "Skip Mon 07:50"
+  AC_ACTION_RING_NEXT,       // clear skip_next -- "Ring Mon 07:50"
+  AC_ACTION_TURN_OFF,        // enabled = false -- "Turn off"
+  AC_ACTION_TURN_ON,         // enabled = true  -- "Turn on"
+} AcAction;
+
+#define AC_MAX_ACTIONS 2
+
+// Writes the actions for `a` into out[0..max) and returns how many. Returns 0 on a
+// NULL argument or max < 1 rather than assuming there is room.
+int ac_row_actions(const Alarm *a, AcAction *out, int max);
+
 // Parse the packed AlarmSet wire format into out[]:
 //     "07:00|1111100;-08:30|0000011"
 // slots separated by ';', each "[-]HH:MM|DDDDDDD" where the seven digits are

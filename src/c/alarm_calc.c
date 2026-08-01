@@ -166,6 +166,27 @@ int ac_next_alarm_unserved(const Alarm *alarms, int count, time_t now,
   return -1;
 }
 
+int ac_row_actions(const Alarm *a, AcAction *out, int max) {
+  if (a == NULL || out == NULL || max < 1) {
+    return 0;
+  }
+  int n = 0;
+  if (!a->enabled) {
+    out[n++] = AC_ACTION_TURN_ON;
+    return n;
+  }
+  // A one-time alarm has exactly one occurrence, so "skip the next one" would
+  // silently move it a day (prv_nth_occurrence(n=2) on a mask-0 alarm returns the
+  // same time tomorrow). Turning it off is the honest action.
+  if (a->weekday_mask != 0 && max >= 2) {
+    out[n++] = a->skip_next ? AC_ACTION_RING_NEXT : AC_ACTION_SKIP_NEXT;
+  }
+  if (n < max) {
+    out[n++] = AC_ACTION_TURN_OFF;
+  }
+  return n;
+}
+
 int ac_prune_spent_one_time(Alarm *alarms, int count, bool *missed,
                            int8_t *pending_slot, int8_t *served_slot) {
   if (alarms == NULL || count <= 0) {

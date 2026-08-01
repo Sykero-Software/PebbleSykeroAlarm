@@ -426,6 +426,44 @@ int main(void) {
     assert(ac_prune_spent_one_time(a2, 0, NULL, NULL, NULL) == 0);
   }
 
+  // --- ac_row_actions: what the alarm-row submenu offers. Pure, because a menu
+  // that offers the wrong action is invisible until someone presses it.
+  {
+    AcAction act[AC_MAX_ACTIONS];
+    Alarm rep = { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x7F,
+                  .enabled = true, .skip_next = false };
+
+    // On, not skipping: skip the next one, or turn it off.
+    assert(ac_row_actions(&rep, act, AC_MAX_ACTIONS) == 2);
+    assert(act[0] == AC_ACTION_SKIP_NEXT && act[1] == AC_ACTION_TURN_OFF);
+
+    // On, already skipping: the first row UNDOES the skip. Offering "skip" again
+    // would be a no-op the user could not tell from a broken button.
+    rep.skip_next = true;
+    assert(ac_row_actions(&rep, act, AC_MAX_ACTIONS) == 2);
+    assert(act[0] == AC_ACTION_RING_NEXT && act[1] == AC_ACTION_TURN_OFF);
+
+    // Off: one row, and NOT a skip -- a disabled alarm has nothing to skip.
+    rep.enabled = false;
+    assert(ac_row_actions(&rep, act, AC_MAX_ACTIONS) == 1);
+    assert(act[0] == AC_ACTION_TURN_ON);
+
+    // A ONE-TIME alarm gets no skip row at all. skip_next on a mask-0 alarm makes
+    // prv_nth_occurrence return the SECOND occurrence of that time of day, i.e. it
+    // silently moves the alarm to tomorrow -- which is not what "skip the next
+    // one" means for an alarm that only has one. Turning it off is the honest
+    // action, and it is what the user wanted anyway.
+    Alarm once = { .minute_of_day = 6 * 60, .weekday_mask = 0, .enabled = true,
+                   .skip_next = false };
+    assert(ac_row_actions(&once, act, AC_MAX_ACTIONS) == 1);
+    assert(act[0] == AC_ACTION_TURN_OFF);
+
+    // Defensive: no room, or no alarm, writes nothing and claims nothing.
+    assert(ac_row_actions(&rep, act, 0) == 0);
+    assert(ac_row_actions(NULL, act, AC_MAX_ACTIONS) == 0);
+    assert(ac_row_actions(&rep, NULL, AC_MAX_ACTIONS) == 0);
+  }
+
   printf("test_alarm_calc: all assertions passed\n");
   return 0;
 }
