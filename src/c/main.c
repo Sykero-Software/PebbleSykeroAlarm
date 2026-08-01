@@ -28,11 +28,23 @@ static MenuLayer *s_list_menu;
 #define MAIN_ROW_TEST        2
 #define MAIN_ROW_COUNT       3
 
+// NOTE -- NO WINDOW ANIMATIONS ANYWHERE IN THIS APP.
+//
+// Every window_stack_push/pop below passes `animated = false`. Reported from the
+// wrist 2026-08-01: every menu transition showed "joku outo välähdys
+// (jonkinlainen rikkinäinen animaatio)" -- a flash, on all of them, not just the
+// newest window. The slide is worth nothing here (this UI is a two-level menu
+// glanced at for seconds) and it is the only thing capable of producing that
+// artifact, so it goes rather than being chased. The ring and waiting screens in
+// particular must appear INSTANTLY: they are the ones that matter at 07:20.
+//
+// Do not "restore" the animation for polish -- it was removed on evidence from
+// real hardware, which the emulator cannot reproduce.
 static void close_to_watchface(void) {
   // Land on the watchface rather than the launcher: the default
   // APP_EXIT_NOT_SPECIFIED returns to wherever the app was launched from.
   exit_reason_set(APP_EXIT_ACTION_PERFORMED_SUCCESSFULLY);
-  window_stack_pop_all(true);
+  window_stack_pop_all(false);
 }
 
 // A tentative definition, so reload_and_rearm (above the ring section) can read
@@ -413,6 +425,13 @@ static uint16_t s_act_minute;
 static uint8_t  s_act_mask;
 static AcAction s_act_actions[AC_MAX_ACTIONS];
 static int      s_act_count;
+// The rendered strings, built ONCE when the submenu opens rather than in
+// draw_row. Each label costs an occurrence computation -- ac_next_occurrence
+// walks up to 16 candidate days through localtime/mktime -- and a MenuLayer
+// redraws every row on every frame of the push animation, so computing them per
+// draw put that work on the frame budget and made the transition visibly stutter.
+static char s_act_labels[AC_MAX_ACTIONS][28];
+static char s_act_title[28];
 
 // The slot currently holding the alarm this submenu opened on, or -1 if it is
 // gone. Never cached: resolving late is the entire point.
@@ -473,43 +492,15 @@ static int16_t act_cell_height(MenuLayer *ml, MenuIndex *ci, void *ctx) {
 // row that was".
 static void act_draw_header(GContext *gctx, const Layer *cell, uint16_t section,
                             void *ctx) {
-  int slot = act_resolve();
-  char title[28];
-  if (slot < 0) {
-    snprintf(title, sizeof(title), "Alarm gone");
-  } else {
-    char days[12];
-    fmt_weekdays(s_alarms[slot].weekday_mask, days, sizeof(days));
-    snprintf(title, sizeof(title), "%02u:%02u  %s",
-             (unsigned)(s_act_minute / 60) % 100u,
-             (unsigned)(s_act_minute % 60) % 100u, days);
-  }
-  draw_header_text(gctx, cell, title);
+  draw_header_text(gctx, cell, s_act_title);
 }
 
+// Draw only -- every string it needs was built by open_alarm_actions.
 static void act_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void *ctx) {
   GRect b = layer_get_bounds(cell);
   graphics_context_set_text_color(gctx, menu_cell_layer_is_highlighted(cell)
                                             ? GColorWhite : GColorBlack);
-  char label[28];
-  int slot = act_resolve();
-  if (slot < 0 || (int)ci->row >= s_act_count) {
-    snprintf(label, sizeof(label), "Back");
-  } else {
-    char occ[16];
-    switch (s_act_actions[ci->row]) {
-      case AC_ACTION_SKIP_NEXT:
-        fmt_occurrence(act_occurrence(slot, false), occ, sizeof(occ));
-        snprintf(label, sizeof(label), "Skip %s", occ);
-        break;
-      case AC_ACTION_RING_NEXT:
-        fmt_occurrence(act_occurrence(slot, true), occ, sizeof(occ));
-        snprintf(label, sizeof(label), "Ring %s", occ);
-        break;
-      case AC_ACTION_TURN_OFF: snprintf(label, sizeof(label), "Turn off"); break;
-      case AC_ACTION_TURN_ON:  snprintf(label, sizeof(label), "Turn on");  break;
-    }
-  }
+  const char *label = ((int)ci->row < s_act_count) ? s_act_labels[ci->row] : "Back";
   graphics_draw_text(gctx, label, fonts_get_system_font(FONT_KEY_GOTHIC_24),
       GRect(6, 1, b.size.w - 12, b.size.h - 2),
       GTextOverflowModeFill, GTextAlignmentLeft, NULL);
@@ -521,7 +512,7 @@ static void act_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
     // The alarm was reconfigured from the phone while this was open. Do nothing
     // rather than act on whatever slid into that index.
     APP_LOG(APP_LOG_LEVEL_WARNING, "action submenu: alarm gone, ignoring");
-    window_stack_pop(true);
+    window_stack_pop(false);
     return;
   }
   Alarm *a = &s_alarms[slot];
@@ -535,7 +526,7 @@ static void act_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
     case AC_ACTION_TURN_ON:   a->enabled = true;    break;
   }
   reload_and_rearm();
-  window_stack_pop(true);   // back to the list, which now shows the new state
+  window_stack_pop(false);   // back to the list, which now shows the new state
 }
 
 static void act_window_load(Window *w) {
@@ -565,6 +556,31 @@ static void open_alarm_actions(int row) {
   s_act_minute = s_alarms[row].minute_of_day;
   s_act_mask = s_alarms[row].weekday_mask;
   s_act_count = ac_row_actions(&s_alarms[row], s_act_actions, AC_MAX_ACTIONS);
+
+  char days[12];
+  fmt_weekdays(s_act_mask, days, sizeof(days));
+  snprintf(s_act_title, sizeof(s_act_title), "%02u:%02u  %s",
+           (unsigned)(s_act_minute / 60) % 100u,
+           (unsigned)(s_act_minute % 60) % 100u, days);
+  for (int i = 0; i < s_act_count; i++) {
+    char occ[16];
+    switch (s_act_actions[i]) {
+      case AC_ACTION_SKIP_NEXT:
+        fmt_occurrence(act_occurrence(row, false), occ, sizeof(occ));
+        snprintf(s_act_labels[i], sizeof(s_act_labels[i]), "Skip %s", occ);
+        break;
+      case AC_ACTION_RING_NEXT:
+        fmt_occurrence(act_occurrence(row, true), occ, sizeof(occ));
+        snprintf(s_act_labels[i], sizeof(s_act_labels[i]), "Ring %s", occ);
+        break;
+      case AC_ACTION_TURN_OFF:
+        snprintf(s_act_labels[i], sizeof(s_act_labels[i]), "Turn off");
+        break;
+      case AC_ACTION_TURN_ON:
+        snprintf(s_act_labels[i], sizeof(s_act_labels[i]), "Turn on");
+        break;
+    }
+  }
   if (!s_act_window) {
     s_act_window = window_create();
     // Its own idle handlers: pushing this window makes the LIST disappear, which
@@ -574,7 +590,7 @@ static void open_alarm_actions(int row) {
       .load = act_window_load, .unload = act_window_unload,
     });
   }
-  window_stack_push(s_act_window, true);
+  window_stack_push(s_act_window, false);   // never animated -- see NOTE at the top
 }
 
 // SELECT opens the action submenu. There is deliberately no second gesture: long
@@ -611,7 +627,7 @@ static void open_alarm_list(void) {
       .load = list_window_load, .unload = list_window_unload,
     });
   }
-  window_stack_push(s_list_window, true);
+  window_stack_push(s_list_window, false);
 }
 
 // --- The "Last night" summary: a calibration tool, not a dismissible post-ring
@@ -739,7 +755,7 @@ static void open_last_night(void) {
       // every safe one that should get this.
     });
   }
-  window_stack_push(s_night_window, true);
+  window_stack_push(s_night_window, false);
 }
 
 static uint16_t main_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
@@ -1447,7 +1463,7 @@ static void start_ring(int slot, bool from_deadline) {
     });
     window_set_click_config_provider(s_ring_window, ring_click_config);
   }
-  window_stack_push(s_ring_window, true);
+  window_stack_push(s_ring_window, false);
   tick_timer_service_subscribe(MINUTE_UNIT, ring_minute_tick);
 
   s_ringing = true;
@@ -1721,7 +1737,7 @@ static void open_smart_window(int slot, time_t window_start, time_t deadline) {
     window_set_click_config_provider(s_wait_window, wait_click_config);
   }
   if (!window_stack_contains_window(s_wait_window)) {
-    window_stack_push(s_wait_window, true);
+    window_stack_push(s_wait_window, false);
   }
   tick_timer_service_subscribe(MINUTE_UNIT, wait_minute_tick);
 
@@ -1960,7 +1976,7 @@ int main(void) {
   window_set_window_handlers(s_main_window, (WindowHandlers){
     .load = main_window_load, .unload = main_window_unload,
   });
-  window_stack_push(s_main_window, true);
+  window_stack_push(s_main_window, false);
 
   if (launched_by_wakeup) {
     handle_wakeup_cookie(launch_cookie);
