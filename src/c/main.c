@@ -120,6 +120,31 @@ static void fmt_weekdays(uint8_t mask, char *out, size_t n) {
   out[7] = '\0';
 }
 
+// A MenuLayer section header. Not a row: it cannot be selected and costs no
+// navigation. Two lines' worth of height so the phone hint wraps on a 144 px
+// screen instead of being truncated.
+#define HINT_HEADER_H 34
+
+static int16_t hint_header_height(MenuLayer *ml, uint16_t section, void *ctx) {
+  return HINT_HEADER_H;
+}
+
+static void draw_header_text(GContext *gctx, const Layer *cell, const char *text) {
+  GRect b = layer_get_bounds(cell);
+  graphics_context_set_text_color(gctx, GColorBlack);
+  graphics_draw_text(gctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_14_BOLD),
+      GRect(4, -1, b.size.w - 8, b.size.h + 2),
+      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+}
+
+// Where alarm times come from. Said on BOTH menus, always: the app used to say it
+// only in the alarm list and only while there were no alarms, so the one sentence
+// that explains the phone's role vanished the moment the app became useful.
+static void draw_phone_hint_header(GContext *gctx, const Layer *cell,
+                                   uint16_t section, void *ctx) {
+  draw_header_text(gctx, cell, "Set times in the phone app");
+}
+
 // "in 13 h", "in 45 min", "in 2 d". Hand-rolled formatting; no float maths.
 static void fmt_relative(time_t when, time_t now, char *out, size_t n) {
   if (when == 0) {
@@ -465,6 +490,8 @@ static void list_window_load(Window *w) {
   menu_layer_set_callbacks(s_list_menu, NULL, (MenuLayerCallbacks){
     .get_num_rows = list_num_rows,
     .get_cell_height = list_cell_height,
+    .get_header_height = hint_header_height,
+    .draw_header = draw_phone_hint_header,
     .draw_row = list_draw_row,
     .select_click = list_select,
     .select_long_click = list_select_long,
@@ -692,6 +719,8 @@ static void main_window_load(Window *w) {
   s_main_menu = menu_layer_create(layer_get_bounds(root));
   menu_layer_set_callbacks(s_main_menu, NULL, (MenuLayerCallbacks){
     .get_num_rows = main_num_rows,
+    .get_header_height = hint_header_height,
+    .draw_header = draw_phone_hint_header,
     .draw_row = main_draw_row,
     .select_click = main_select,
   });
