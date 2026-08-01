@@ -75,6 +75,29 @@ static const char *prv_fmt_mod(uint16_t mod, char *buf, int n) {
 #define DBG_CHUNK 60
 static HealthMinuteData s_chunk[DBG_CHUNK];
 
+// The firmware's own sleep-session start. hr_read_night anchors the ranking
+// population there, so a replay that starts anywhere else computes a DIFFERENT
+// baseline and trigger level -- it would look like a faithful reproduction and
+// silently disagree with what the watch actually decided.
+static time_t s_onset;
+
+static bool prv_dbg_onset_cb(HealthActivity activity, time_t time_start,
+                             time_t time_end, void *context) {
+  if (activity == HealthActivitySleep) {
+    s_onset = time_start;
+    return false;   // newest-first: the first hit is the current session
+  }
+  return true;
+}
+
+static time_t prv_session_onset(time_t now) {
+  s_onset = 0;
+  health_service_activities_iterate(HealthActivitySleep, now - 20 * SECONDS_PER_HOUR,
+                                    now, HealthIterationDirectionPast,
+                                    prv_dbg_onset_cb, NULL);
+  return s_onset;
+}
+
 // Chunked read of an explicit UTC range. Deliberately a copy of
 // hr_read_night's loop rather than a call into it: that function anchors itself
 // on the current sleep session and on time(NULL), and this needs a range
@@ -119,6 +142,8 @@ static int prv_read_range(SleepMinute *out, int max, time_t from, time_t to,
   *first_utc = 0;
   return 0;
 }
+
+static time_t prv_session_onset(time_t now) { return 0; }
 
 #endif
 
@@ -288,6 +313,29 @@ static void prv_dump_eval(void) {
                         : 0, b, sizeof b),
           (unsigned long)r.acc, (int)r.insufficient_data);
 
+  // The same evaluation ANCHORED AT THE SLEEP SESSION, which is what
+  // hr_read_night feeds se_evaluate in the real run. Different population start
+  // -> different baseline and trigger level, so this is the line to compare
+  // against the night summary, not the one above.
+  time_t onset = prv_session_onset(time(NULL));
+  APP_LOG(APP_LOG_LEVEL_INFO, "DBG onset session=%s",
+          prv_fmt_t(onset, a, sizeof a));
+  if (onset > s_hist_first
+      && (int)((onset - s_hist_first) / SECONDS_PER_MINUTE) < s_win_idx) {
+    int off = (int)((onset - s_hist_first) / SECONDS_PER_MINUTE);
+    SleepEvalResult orr = se_evaluate(s_hist + off, s_hist_n - off,
+                                      s_win_idx - off, false, &sc);
+    APP_LOG(APP_LOG_LEVEL_INFO,
+            "DBG evalonset off=%d base=%u lvl=%u fire=%d fidx=%d at=%s acc=%lu",
+            off, (unsigned)orr.baseline, (unsigned)orr.trigger_level,
+            (int)orr.fire, orr.fired_index,
+            prv_fmt_t(orr.fired_index >= 0
+                          ? s_hist_first
+                                + (time_t)(off + orr.fired_index) * SECONDS_PER_MINUTE
+                          : 0, b, sizeof b),
+            (unsigned long)orr.acc);
+  }
+
   static const uint8_t k_alt[4] = { 95, 90, 82, 75 };
   for (int k = 0; k < 4; k++) {
     SleepEvalCfg ac;
@@ -421,8 +469,21 @@ void dbg_dump(const Alarm *alarms, int count, const Config *cfg,
     bool was_enabled = probe.enabled;
     probe.enabled = true;
     probe.skip_next = false;
-    time_t t = ac_next_occurrence(&probe, now - 25 * SECONDS_PER_HOUR);
-    if (t == 0 || t > now) {
+    // ac_next_occurrence returns the FIRST occurrence after its base, so for a
+    // daily alarm a base of now-25h yields YESTERDAY's -- which picked the wrong
+    // alarm on the first real dump. Walk forward and keep the last one that is
+    // still in the past.
+    time_t t = 0;
+    time_t cur = now - 25 * SECONDS_PER_HOUR;
+    for (int step = 0; step < 40; step++) {
+      time_t nx = ac_next_occurrence(&probe, cur);
+      if (nx == 0 || nx > now) {
+        break;
+      }
+      t = nx;
+      cur = nx;
+    }
+    if (t == 0) {
       continue;
     }
     if (t > best_any) {
