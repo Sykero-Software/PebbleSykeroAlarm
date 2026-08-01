@@ -120,6 +120,29 @@ static void fmt_weekdays(uint8_t mask, char *out, size_t n) {
   out[7] = '\0';
 }
 
+// --- The night palette -------------------------------------------------------
+//
+// The two screens a half-asleep person reads -- the smart window's waiting screen
+// and the ring screen -- are drawn WHITE ON BLACK. They are looked at in the dark
+// with the backlight on, where a full-white screen is a torch to the face; the
+// menus keep the normal light look because they are read awake.
+//
+// Deliberately not configurable. A toggle would need an appended message key, a
+// Config field and a CONFIG_VERSION bump (a trailing bool lands in existing
+// padding, so sizeof does not change and the version is the only thing that would
+// discard a stale blob) -- more machinery than the feature, and the option can be
+// added later at exactly the same cost if anyone wants the light version back.
+#define NIGHT_BG GColorBlack
+#define NIGHT_FG GColorWhite
+
+// A text layer on a night screen: transparent, so it inherits the window's black,
+// and light text. Every layer on those two windows goes through this, so none can
+// be forgotten into invisible black-on-black.
+static void night_text_layer(TextLayer *tl) {
+  text_layer_set_background_color(tl, GColorClear);
+  text_layer_set_text_color(tl, NIGHT_FG);
+}
+
 // A MenuLayer section header. Not a row: it cannot be selected and costs no
 // navigation. Two lines' worth of height so the phone hint wraps on a 144 px
 // screen instead of being truncated.
@@ -1384,7 +1407,10 @@ static void ring_click_config(void *ctx) {
 
 static void progress_update(Layer *layer, GContext *gctx) {
   GRect b = layer_get_bounds(layer);
-  graphics_context_set_fill_color(gctx, GColorBlack);
+  // NIGHT_FG, not black: this bar sits on the ring screen, which is black. It was
+  // the one piece of drawing that does not go through a TextLayer, so it is also
+  // the one that would silently vanish.
+  graphics_context_set_fill_color(gctx, NIGHT_FG);
   int w = (int)((uint32_t)b.size.w * s_hold_ms / STOP_HOLD_MS);
   graphics_fill_rect(gctx, GRect(0, 0, w, b.size.h), 0, GCornerNone);
 }
@@ -1420,7 +1446,7 @@ static GFont ring_time_font(int box_w, int time_h, GSize *out) {
 static void ring_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
-  window_set_background_color(w, GColorWhite);
+  window_set_background_color(w, NIGHT_BG);
 
   // Follows PebbleCountdownTimer's alarm screen (src/c/main.c:344-399): the two
   // button labels right-aligned and positioned vertically AT their physical
@@ -1470,7 +1496,7 @@ static void ring_window_load(Window *w) {
   text_layer_set_font(s_ring_up, btn_font);
   text_layer_set_text_alignment(s_ring_up, GTextAlignmentRight);
   text_layer_set_text(s_ring_up, "Snooze");
-  text_layer_set_background_color(s_ring_up, GColorClear);
+  night_text_layer(s_ring_up);
   layer_add_child(root, text_layer_get_layer(s_ring_up));
 
   // "Stop" is constant regardless of s_cfg.stop_gesture -- at either label
@@ -1481,7 +1507,7 @@ static void ring_window_load(Window *w) {
   text_layer_set_font(s_ring_down, btn_font);
   text_layer_set_text_alignment(s_ring_down, GTextAlignmentRight);
   text_layer_set_text(s_ring_down, "Stop");
-  text_layer_set_background_color(s_ring_down, GColorClear);
+  night_text_layer(s_ring_down);
   layer_add_child(root, text_layer_get_layer(s_ring_down));
 
   // Time + subtitle share the band left between the two button labels, split
@@ -1490,13 +1516,13 @@ static void ring_window_load(Window *w) {
   s_ring_time = text_layer_create(GRect(0, mid_top, b.size.w, time_h));
   text_layer_set_font(s_ring_time, time_font);
   text_layer_set_text_alignment(s_ring_time, GTextAlignmentCenter);
-  text_layer_set_background_color(s_ring_time, GColorClear);
+  night_text_layer(s_ring_time);
   layer_add_child(root, text_layer_get_layer(s_ring_time));
 
   s_ring_sub = text_layer_create(GRect(0, mid_top + time_h, b.size.w, sub_h));
   text_layer_set_font(s_ring_sub, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
   text_layer_set_text_alignment(s_ring_sub, GTextAlignmentCenter);
-  text_layer_set_background_color(s_ring_sub, GColorClear);
+  night_text_layer(s_ring_sub);
   layer_add_child(root, text_layer_get_layer(s_ring_sub));
 
   // The hint reuses the subtitle's exact slot (hidden/shown together, never
@@ -1508,7 +1534,7 @@ static void ring_window_load(Window *w) {
   s_ring_hint = text_layer_create(GRect(0, mid_top + time_h, b.size.w, sub_h));
   text_layer_set_font(s_ring_hint, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(s_ring_hint, GTextAlignmentCenter);
-  text_layer_set_background_color(s_ring_hint, GColorClear);
+  night_text_layer(s_ring_hint);
   layer_add_child(root, text_layer_get_layer(s_ring_hint));
   layer_set_hidden(text_layer_get_layer(s_ring_hint), true);
 
@@ -1657,15 +1683,19 @@ static void wait_window_update(void) {
 static void wait_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
+  window_set_background_color(w, NIGHT_BG);
+
   s_wait_time = text_layer_create(GRect(0, b.size.h / 2 - 52, b.size.w, 44));
   text_layer_set_font(s_wait_time, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
   text_layer_set_text_alignment(s_wait_time, GTextAlignmentCenter);
+  night_text_layer(s_wait_time);
   layer_add_child(root, text_layer_get_layer(s_wait_time));
 
   s_wait_sub = text_layer_create(GRect(4, b.size.h / 2, b.size.w - 8, 60));
   text_layer_set_font(s_wait_sub, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_text_alignment(s_wait_sub, GTextAlignmentCenter);
   text_layer_set_overflow_mode(s_wait_sub, GTextOverflowModeWordWrap);
+  night_text_layer(s_wait_sub);
   layer_add_child(root, text_layer_get_layer(s_wait_sub));
 
   wait_window_update();
