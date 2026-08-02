@@ -47,6 +47,40 @@ static void close_to_watchface(void) {
   window_stack_pop_all(false);
 }
 
+// A WAKEUP LAUNCH THAT PUTS NOTHING ON SCREEN MUST NOT LEAVE THE APP SITTING ON
+// THE MAIN MENU.
+//
+// WC_DST fires at 03:00 EVERY night purely to re-arm the wakeups after a
+// possible clock shift, and its handler is a bare sc_rearm(). The launch it
+// rides in on used to be ended by the idle auto-exit, which was removed on
+// 2026-08-01 -- and nothing replaced it. Reported from the wrist the very next
+// morning: at 07:20 the watch was still showing this app's menu, subtitled
+// "next alarm in 4 h" -- a value computed at 03:00 (07:50 minus 03:00) and never
+// redrawn, since the main menu has no minute tick. So: no watchface for four and
+// a half hours, an app running all night for nothing, and a stale number that
+// read as a scheduling bug.
+//
+// Every other wakeup that legitimately ends up showing nothing needs the same
+// treatment -- WC_WINDOW with no alarm left to arm, a WC_DEADLINE whose slot the
+// phone deleted, a window declined because a snooze is pending -- so the
+// condition is "no ring and no waiting window on the stack". Read from the
+// WINDOW STACK, never from s_ringing: this app has already produced one defect
+// from testing that proxy instead of what is actually on screen (over_cap clears
+// s_ringing while leaving the "Alarm missed" screen up).
+//
+// The delay exists for the launch config handshake -- request_config() asks the
+// phone to resend its saved config, and that reply is this app's nightly resync.
+// Measured over the CloudPebble relay it lands ~1.4 s after launch, so 10 s is
+// generous headroom while still being a bounded stay. It is deliberately NOT
+// cancelled by a button press: a wakeup launch is unattended by construction,
+// and a cancel path is the idle timer growing back.
+#define WAKEUP_LAUNCH_EXIT_MS 10000
+static void wakeup_launch_exit_cb(void *data) {
+  APP_LOG(APP_LOG_LEVEL_INFO,
+          "wakeup launch put nothing on screen -- returning to the watchface");
+  close_to_watchface();
+}
+
 // A tentative definition, so reload_and_rearm (above the ring section) can read
 // the live "an alarm is ringing right now" flag. Its one real definition is
 // further down with the rest of the ring state; only one of two tentative
@@ -2035,6 +2069,15 @@ int main(void) {
   // After open (the outbox does not exist before it) and after the handlers are
   // registered above.
   request_config();
+
+  // See WAKEUP_LAUNCH_EXIT_MS. Decided here, synchronously after
+  // handle_wakeup_cookie has had its one chance to push a screen, so the test is
+  // over settled state rather than over a race.
+  if (launched_by_wakeup
+      && !(s_ring_window && window_stack_contains_window(s_ring_window))
+      && !(s_wait_window && window_stack_contains_window(s_wait_window))) {
+    app_timer_register(WAKEUP_LAUNCH_EXIT_MS, wakeup_launch_exit_cb, NULL);
+  }
 
   // TEMPORARY (2026-08-01): dump the past night to `pebble logs` so the
   // "rang 30 minutes early" report can be read off the watch's own recorded
