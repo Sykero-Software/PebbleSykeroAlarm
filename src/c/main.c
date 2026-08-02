@@ -181,6 +181,35 @@ static void refresh_list(void) {
   }
 }
 
+// The two menu screens are written in RELATIVE time ("next in 51 min", "in 23 h",
+// "skip, in 1 d"), and a MenuLayer only redraws when something asks it to -- so
+// left alone those numbers are as old as the screen. That is not theoretical: on
+// 2026-08-02 the app sat on its main menu from 03:00 (see the wakeup-launch exit
+// above) and the "next alarm in 4 h" the user read at 07:20 had been computed
+// four hours earlier. It read as a scheduling defect. The exit fix bounds an
+// unattended screen to 10 s, but a screen the user opens themselves can sit there
+// as long as they like, so the numbers now redraw themselves.
+//
+// Subscribed PER SCREEN (.appear/.disappear) rather than once for the app: the
+// tick service holds exactly one handler, and the ring and waiting screens
+// install their own. Arming on appear and dropping it on disappear means whoever
+// is on top owns the tick, in both directions, without any window having to know
+// about the others. Both of those screens subscribe AFTER their own
+// window_stack_push, i.e. after this disappear has run, so the handover is
+// ordered correctly in the one direction that could clobber a live alarm screen.
+static void menu_minute_tick(struct tm *t, TimeUnits units) {
+  refresh_list();
+}
+
+static void menu_win_appear(Window *w) {
+  tick_timer_service_subscribe(MINUTE_UNIT, menu_minute_tick);
+  refresh_list();   // minutes may have passed while another window was on top
+}
+
+static void menu_win_disappear(Window *w) {
+  tick_timer_service_unsubscribe();
+}
+
 static void reload_and_rearm(void) {
   as_save_alarms(s_alarms, s_count);
   as_save_runstate(&s_rs);
@@ -659,6 +688,9 @@ static void open_alarm_list(void) {
     s_list_window = window_create();
     window_set_window_handlers(s_list_window, (WindowHandlers){
       .load = list_window_load, .unload = list_window_unload,
+      // Keeps every row's relative time honest while the list is on screen --
+      // see menu_minute_tick.
+      .appear = menu_win_appear, .disappear = menu_win_disappear,
     });
   }
   window_stack_push(s_list_window, false);
@@ -2009,6 +2041,9 @@ int main(void) {
   s_main_window = window_create();
   window_set_window_handlers(s_main_window, (WindowHandlers){
     .load = main_window_load, .unload = main_window_unload,
+    // Keeps the "next in ..." subtitle honest while the menu is on screen --
+    // see menu_minute_tick.
+    .appear = menu_win_appear, .disappear = menu_win_disappear,
   });
   window_stack_push(s_main_window, false);
 
