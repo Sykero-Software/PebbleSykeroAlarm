@@ -1539,6 +1539,8 @@ static void start_ring(int slot, bool from_deadline) {
 // --- The smart window: minute-history reads, the waiting screen, the 1-min poll. ---
 
 static Window    *s_wait_window;
+static TextLayer *s_wait_keys;        // the two-line "how to get out" legend
+static AppTimer  *s_wait_hint_timer;
 static TextLayer *s_wait_time;
 static TextLayer *s_wait_sub;
 static AppTimer  *s_poll_timer;
@@ -1585,6 +1587,12 @@ static void wait_window_update(void) {
   text_layer_set_text(s_wait_sub, sub);
 }
 
+// The two-line legend at the foot of the waiting screen. It is drawn ALWAYS, not
+// only after a press: the user was trapped on this screen on 2026-08-03 ("alarm
+// waiting screenistä ei pääse pois ollenkaan"), and a way out nobody can find is
+// the same defect the alarm list's hidden long-press already cost this app once.
+#define WAIT_KEYS_TEXT "2x Back: watchface\n2x Down: cancel alarm"
+
 static void wait_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
@@ -1603,10 +1611,25 @@ static void wait_window_load(Window *w) {
   night_text_layer(s_wait_sub);
   layer_add_child(root, text_layer_get_layer(s_wait_sub));
 
+  // Small, at the very bottom, so it does not compete with the clock and the
+  // alarm time at 3 a.m. -- but present.
+  s_wait_keys = text_layer_create(GRect(2, b.size.h - 36, b.size.w - 4, 34));
+  text_layer_set_font(s_wait_keys, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  text_layer_set_text_alignment(s_wait_keys, GTextAlignmentCenter);
+  night_text_layer(s_wait_keys);
+  text_layer_set_text(s_wait_keys, WAIT_KEYS_TEXT);
+  layer_add_child(root, text_layer_get_layer(s_wait_keys));
+
   wait_window_update();
 }
 
 static void wait_window_unload(Window *w) {
+  if (s_wait_hint_timer) {
+    app_timer_cancel(s_wait_hint_timer);
+    s_wait_hint_timer = NULL;
+  }
+  text_layer_destroy(s_wait_keys);
+  s_wait_keys = NULL;
   text_layer_destroy(s_wait_sub);
   text_layer_destroy(s_wait_time);
   // NULL both out (carried fix from Task 11's review, mirroring
@@ -1620,10 +1643,95 @@ static void wait_window_unload(Window *w) {
 
 static void wait_noop(ClickRecognizerRef rec, void *ctx) {}
 
+static void wait_hint_hide_cb(void *data) {
+  s_wait_hint_timer = NULL;
+  if (s_wait_keys) {
+    text_layer_set_text(s_wait_keys, WAIT_KEYS_TEXT);
+  }
+}
+
+// A single press is never inert: it says what the second press would do. Same
+// reasoning as the ring screen's "Press 2x to stop" -- without it the button
+// feels broken and the user presses again too slowly for the 400 ms window.
+static void wait_show_hint(const char *msg) {
+  if (!s_wait_keys) {
+    return;
+  }
+  text_layer_set_text(s_wait_keys, msg);
+  if (s_wait_hint_timer) {
+    app_timer_cancel(s_wait_hint_timer);
+  }
+  s_wait_hint_timer = app_timer_register(HINT_SHOW_MS, wait_hint_hide_cb, NULL);
+}
+
+// CANCEL THE ALARM FROM THE WAITING SCREEN -- everything Stop does on the ring
+// screen, minus the ring that never happened. Marking the occurrence SERVED is
+// the part that makes "cancel" mean it: without that stamp the very next re-arm
+// (this one, the 03:00 clock check, a phone config save) would pick today's
+// occurrence straight back up and the window would reopen minutes later. Read
+// deadline_at BEFORE runstate_end_cycle clears it.
+static void wait_cancel_now(void) {
+  int slot = s_rs.pending_slot;
+  time_t deadline = (time_t)s_rs.deadline_at;
+  APP_LOG(APP_LOG_LEVEL_INFO, "WAIT cancel slot=%d deadline=%lu",
+          slot, (unsigned long)deadline);
+  if (slot >= 0 && slot < MAX_ALARMS) {
+    s_rs.missed[slot] = false;
+    if (s_alarms[slot].weekday_mask == 0) {
+      s_alarms[slot].enabled = false;    // a one-time alarm is spent either way
+    }
+    if (s_alarms[slot].skip_next) {
+      s_alarms[slot].skip_next = false;  // the skip has been consumed
+    }
+    if (deadline != 0) {
+      s_rs.served_slot = (int8_t)slot;
+      s_rs.served_at = (uint32_t)deadline;
+    }
+  }
+  runstate_end_cycle();
+  reload_and_rearm();
+  close_to_watchface();
+}
+
+static void wait_down_multi(ClickRecognizerRef rec, void *ctx) {
+  if (click_number_of_clicks_counted(rec) >= STOP_PRESSES) {
+    wait_cancel_now();
+  } else {
+    wait_show_hint("Press 2x to cancel the alarm");
+  }
+}
+
+// LEAVING IS NOT CANCELLING. This only pops back to the watchface; the smart
+// window stays open and its rolling re-entry wakeup brings the app -- and this
+// screen -- back within SC_REENTRY_GAP_S. That return is deliberate and was the
+// user's own call: "toki toisella napilla voisi olla niin että pääsee
+// kellotaululle ja se sit kuitenkin käynnistyy uudelleen itsestään". The only
+// cost is that monitoring runs at re-entry granularity (3 min) instead of the
+// 1-minute poll while the app is dead, which is why this is NOT the button that
+// gets you out for good -- that is DOWN.
+static void wait_back_multi(ClickRecognizerRef rec, void *ctx) {
+  if (click_number_of_clicks_counted(rec) >= STOP_PRESSES) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "WAIT -> watchface (window stays open)");
+    close_to_watchface();
+  } else {
+    wait_show_hint("Press 2x for the watchface");
+  }
+}
+
 static void wait_click_config(void *ctx) {
-  // BACK must not dismiss the window: doing so would abandon the smart window and
-  // leave only the deadline. Same reasoning as on the ring screen.
-  window_single_click_subscribe(BUTTON_ID_BACK, wait_noop);
+  // BOTH ways out need TWO presses, by the user's decision (2026-08-03): one
+  // press must never end -- or even interrupt -- an alarm, because a half-asleep
+  // hand finds one button by feel. That is the same rule the ring screen's stop
+  // gesture already follows, and DOWN 2x deliberately means the same thing on
+  // both screens: this alarm is done with.
+  window_multi_click_subscribe(BUTTON_ID_DOWN, 1, STOP_PRESSES, 400, false,
+                               wait_down_multi);
+  window_multi_click_subscribe(BUTTON_ID_BACK, 1, STOP_PRESSES, 400, false,
+                               wait_back_multi);
+  // Explicitly inert rather than unbound: an unbound BACK pops the window by
+  // default, and UP is the snooze button one screen later.
+  window_single_click_subscribe(BUTTON_ID_UP, wait_noop);
+  window_single_click_subscribe(BUTTON_ID_SELECT, wait_noop);
 }
 
 static void wait_minute_tick(struct tm *t, TimeUnits units) {

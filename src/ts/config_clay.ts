@@ -157,8 +157,10 @@ export function buildConfig(): any[] {
       ] },
     { type: 'slider', messageKey: 'SnoozeRampOffsetS',
       label: 'Each snooze starts this far along (s)',
-      defaultValue: 120, min: 0, max: 600, step: 10, id: 'snooze-ramp',
-      description: '0 restarts the ramp from the very beginning each time.' },
+      defaultValue: 0, min: 0, max: 600, step: 10, id: 'snooze-ramp',
+      description: 'Default 0: every snooze restarts the ramp from the '
+                 + 'beginning. Raise it to make each snooze pick up further '
+                 + 'along, so a second alarm starts stronger than the first.' },
     { type: 'text', defaultValue:
         'Press the bottom button TWICE to stop the alarm. A single press only '
       + 'snoozes, so a half-asleep tap cannot end it by accident.' },

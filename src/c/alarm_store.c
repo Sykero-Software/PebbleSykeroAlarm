@@ -119,7 +119,14 @@ void as_load_config(Config *out) {
     esc_profile(ESC_PROFILE_NORMAL, &out->esc);
     out->snooze_min = 10;
     out->snooze_max = 5;
-    out->snooze_ramp_offset_s = 120;
+    // 0 since 2026-08-03: every snooze restarts the ramp from the beginning.
+    // Was 120, which made each snooze start two minutes further along -- and with
+    // the vibration ramp switched ON that is felt directly, as a second alarm
+    // that buzzes harder than the first did. Reported from the wrist. The
+    // escalation the user asked for is the one INSIDE a ring; a snooze is a fresh
+    // request to be woken, not an accumulating punishment. The slider is still
+    // there for anyone who wants the old behaviour.
+    out->snooze_ramp_offset_s = 0;
     out->esc_ramp_vib = false;   // explicit: the flattened vibration is the default
   }
   esc_clamp(&out->esc);
