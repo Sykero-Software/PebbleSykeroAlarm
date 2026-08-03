@@ -15,30 +15,38 @@ well:
   leaky integrator before firing — a real lighter-sleep signal, not a twitch.
   There is always a hard deadline behind it, so a quiet night still rings on
   time.
-- **A gradual, configurable wake escalation.** Vibration starts gentle with
-  deliberately long gaps — enough for someone whose wrist position muffles the
-  buzz to notice and shift — then tightens and strengthens over time; sound
-  joins later and ramps in volume on watches with a speaker. Three presets
-  (Gentle / Normal / Insistent) plus a Custom profile expose the individual
-  timing parameters.
+- **A configurable wake escalation.** By default the vibration is at full
+  strength from the first buzz at a constant gap, and only the sound ramps —
+  a repeated too-gentle stimulus trains a sleeper to ignore the channel, so
+  the gentle start is opt-in rather than the default. Sound joins later and
+  ramps in volume on watches with a speaker. Three presets (Gentle / Normal /
+  Insistent) plus a Custom profile expose the individual timing parameters.
 
 Other features:
 
 - Up to **8 alarm slots**, each with weekday repeat or one-time firing,
   enable/disable, skip-next and snooze.
-- A configurable **stop gesture** (long press, two-tap or three-tap) so a
-  sleepy hand can't dismiss the alarm by accident; `BACK` deliberately does
-  nothing while it's ringing.
+- **Two presses of the bottom button stop the alarm** — a single press only
+  snoozes, so a sleepy hand can't dismiss it by accident; `BACK` deliberately
+  does nothing while it's ringing.
 - A **"Last night" summary** on the watch: sleep onset, the movement
   baseline, what triggered the alarm, and when it would have fired at each
   other sensitivity — the built-in calibration tool for deciding whether to
   move the percentile.
-- Idle auto-exit back to the watchface.
 
 All configuration — alarm times, smart-alarm window and sensitivity, wake
-profile, escalation timing, snooze behaviour, stop gesture, idle exit — is
-done **phone-side via a Clay config page**; the watch shows state and offers
-quick actions, but there is no on-watch editing.
+profile, escalation timing, snooze behaviour — is done **phone-side via a Clay
+config page**; the watch shows state and offers quick actions, but there is no
+on-watch editing.
+
+## How it works
+
+**[docs/how-it-works.md](docs/how-it-works.md)** explains what the app actually
+does — what the alarm time means, how the wake threshold is derived from your
+own night, how the escalation and snooze behave, when the app is running at
+all, and what every setting changes. It is written for someone using the alarm
+rather than maintaining it, and its charts are drawn from a real recorded
+night rather than from illustrative data.
 
 ## Platform limits
 
@@ -52,6 +60,10 @@ quick actions, but there is no on-watch editing.
   backlight only; when there's no speaker (or it's muted), the vibration ramp
   compresses so it still reaches full strength instead of silently stopping
   halfway.
+- **No app alarm can ring in the watch's low-power mode.** PebbleOS disables the
+  wakeup service below `RunLevel_Normal`/`Stationary`, and every alarm this app
+  schedules is a wakeup; the *built-in* alarm service is explicitly enabled at
+  `RunLevel_LowPower` and a third-party app cannot be. Keep the watch charged.
 - Target platforms: aplite, basalt, diorite, emery, flint.
 
 Developed as a submodule of the private `pebble-timetracking` superrepo,
