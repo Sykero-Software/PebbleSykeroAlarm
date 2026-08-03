@@ -1,5 +1,7 @@
 # How Sykerö Smart Alarm works
 
+*Suomeksi: [how-it-works.fi.md](how-it-works.fi.md)*
+
 This describes what the app actually does, in enough detail that you can predict
 its behaviour — and argue with it — without reading the code. It is written for
 someone using the alarm, not maintaining it.

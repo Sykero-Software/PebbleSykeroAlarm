@@ -41,7 +41,8 @@ on-watch editing.
 
 ## How it works
 
-**[docs/how-it-works.md](docs/how-it-works.md)** explains what the app actually
+**[docs/how-it-works.md](docs/how-it-works.md)** — suomeksi
+**[docs/how-it-works.fi.md](docs/how-it-works.fi.md)** — explains what the app actually
 does — what the alarm time means, how the wake threshold is derived from your
 own night, how the escalation and snooze behave, when the app is running at
 all, and what every setting changes. It is written for someone using the alarm
