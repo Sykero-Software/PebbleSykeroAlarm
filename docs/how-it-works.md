@@ -120,12 +120,12 @@ the accumulator drains by construction.
 
 The only thing this setting changes is which percentile becomes the trigger level:
 
-| Setting | Percentile | Effect |
-|---|---|---|
-| Low — only a clear stir | 95 | Fires rarely; you are more likely to be woken by the alarm time itself |
-| **Medium** *(default)* | 90 | |
-| High — the slightest stir | 82 | Fires early and often |
-| Custom | your choice, 70–99 | Also lets you set the sustained-for length, 1–5 minutes |
+| Setting | Percentile | Sustained for | Effect |
+|---|---|---|---|
+| Low — only a clear stir | 95 | 2 min | Fires rarely; you are more likely to be woken by the alarm time itself |
+| **Medium** *(default)* | 90 | 2 min | |
+| High — the slightest stir | 82 | 2 min | Fires early and often |
+| Custom | your choice, 70–99 | your choice, 1–5 min | The only way to change the sustained-for length |
 
 The **Last night** screen on the watch exists to make this decidable rather than
 guessy: it shows what the trigger level was, when the alarm actually fired, and
@@ -158,6 +158,9 @@ up, when sound joins, and how loud it gets:
 | **Normal** *(default)* | 30 s | 5 min | 100 | 15 min |
 | Insistent | 15 s | 1 min | 100 | 15 min |
 | Custom | all twelve numbers are yours | | | |
+
+(All twelve, side by side, are in §6 — the presets differ less than their names
+suggest.)
 
 When the ring gives up, it stops making noise but leaves **"Alarm missed"** on the
 screen, so the morning tells you what happened.
@@ -260,18 +263,31 @@ Custom; otherwise the preset supplies those numbers.
 |---|---|---|
 | Ramp the vibration up | **off** | On: a gentle start that tightens. Off: full strength from the first buzz |
 | Wake style | Normal | A preset for all twelve numbers below |
-| *Custom:* gap between buzzes | 30 s | Silence between bursts at the start |
-| *Custom:* final gap | 5 s | Silence between bursts once fully ramped (only reachable with the ramp on) |
-| *Custom:* tighten over | 360 s | How long the ramp takes (only with the ramp on) |
-| *Custom:* first pulse | 80 ms | Pulse length at the start (only with the ramp on) |
-| *Custom:* pulse length | 700 ms | Pulse length once fully ramped — and from the very first buzz with the ramp off |
-| *Custom:* first burst pulses | 1 | Pulses per burst at the start (only with the ramp on) |
-| *Custom:* pulses per buzz | 3 | Pulses per burst once ramped — and from the first buzz with the ramp off |
-| *Custom:* sound joins after | 300 s | When sound starts. **No effect on a watch without a speaker** |
-| *Custom:* volume ramp | 300 s | How long volume takes to reach its maximum. Speaker only |
-| *Custom:* first volume | 15 | Volume when sound joins. Speaker only |
-| *Custom:* max volume | 100 | Loudest it gets. Speaker only |
-| *Custom:* give up after | 900 s | How long the ring lasts before it stops making noise |
+
+**A "wake style" is exactly these twelve numbers**, and choosing Custom starts you
+from the Normal column. Seeing them side by side is also the quickest way to
+understand what the presets really differ in:
+
+| *Custom* setting | Gentle | **Normal** | Insistent | What it changes |
+|---|---|---|---|---|
+| gap between buzzes | 45 s | 30 s | 15 s | Silence between bursts at the start |
+| final gap | 10 s | 5 s | 3 s | Silence between bursts once fully ramped (only reachable with the ramp on) |
+| tighten over | 600 s | 360 s | 180 s | How long the ramp takes (only with the ramp on) |
+| first pulse | 60 ms | 80 ms | 200 ms | Pulse length at the start (only with the ramp on) |
+| pulse length | 500 ms | 700 ms | 700 ms | Pulse length once fully ramped — and from the very first buzz with the ramp off |
+| first burst pulses | 1 | 1 | 2 | Pulses per burst at the start (only with the ramp on) |
+| pulses per buzz | 3 | 3 | 3 | Pulses per burst once ramped — and from the first buzz with the ramp off |
+| sound joins after | 480 s | 300 s | 60 s | When sound starts. **No effect on a watch without a speaker** |
+| volume ramp | 300 s | 300 s | 180 s | How long volume takes to reach its maximum. Speaker only |
+| first volume | 10 | 15 | 30 | Volume when sound joins. Speaker only |
+| max volume | 70 | 100 | 100 | Loudest it gets. Speaker only |
+| give up after | 1200 s | 900 s | 900 s | How long the ring lasts before it stops making noise |
+
+Read down the columns and the presets are less different than their names suggest —
+especially with the ramp off, which switches off the four rows marked *only with the
+ramp on* and makes every buzz start at the "pulse length" and "pulses per buzz"
+values. On a watch without a speaker, four more rows do nothing, and Gentle versus
+Normal comes down to 45 s versus 30 s between identical full-strength buzzes.
 
 ### Snooze and stopping
 

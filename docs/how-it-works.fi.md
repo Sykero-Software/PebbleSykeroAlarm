@@ -121,12 +121,12 @@ minuutilla, kertymä valuu tyhjäksi itsestään.
 
 Ainoa asia jonka tämä asetus muuttaa on se, mistä persentiilistä tulee laukaisukynnys:
 
-| Asetus | Persentiili | Vaikutus |
-|---|---|---|
-| Low — only a clear stir | 95 | Laukeaa harvoin; sinut herättää todennäköisemmin herätysaika itse |
-| **Medium** *(oletus)* | 90 | |
-| High — the slightest stir | 82 | Laukeaa aikaisin ja usein |
-| Custom | oma valinta, 70–99 | Antaa asettaa myös vaaditun keston, 1–5 minuuttia |
+| Asetus | Persentiili | Vaadittu kesto | Vaikutus |
+|---|---|---|---|
+| Low — only a clear stir | 95 | 2 min | Laukeaa harvoin; sinut herättää todennäköisemmin herätysaika itse |
+| **Medium** *(oletus)* | 90 | 2 min | |
+| High — the slightest stir | 82 | 2 min | Laukeaa aikaisin ja usein |
+| Custom | oma valinta, 70–99 | oma valinta, 1–5 min | Ainoa tapa muuttaa vaadittua kestoa |
 
 Kellon **Last night** -näyttö on olemassa juuri siksi, että tämän voi päättää eikä
 arvata: se kertoo mikä laukaisukynnys oli, milloin herätys todella laukesi, ja
@@ -159,6 +159,9 @@ tulee:
 | **Normal** *(oletus)* | 30 s | 5 min | 100 | 15 min |
 | Insistent | 15 s | 1 min | 100 | 15 min |
 | Custom | kaikki kaksitoista lukua ovat omiasi | | | |
+
+(Kaikki kaksitoista rinnakkain löytyvät luvusta 6 — esiasetukset eroavat vähemmän
+kuin niiden nimet antavat ymmärtää.)
 
 Kun soitto luovuttaa, se lakkaa pitämästä ääntä mutta jättää näytölle
 **"Alarm missed"**, jotta aamu kertoo mitä tapahtui.
@@ -261,18 +264,32 @@ Custom-tilaan; muuten esiasetus antaa nuo luvut.
 |---|---|---|
 | Ramp the vibration up | **pois** | Päällä: hento aloitus joka tiukkenee. Pois: täysi voima ensimmäisestä purskeesta |
 | Wake style | Normal | Esiasetus kaikille kahdelletoista alla olevalle luvulle |
-| *Custom:* gap between buzzes | 30 s | Hiljaisuus purskeiden välillä alussa |
-| *Custom:* final gap | 5 s | Hiljaisuus purskeiden välillä täysin voimistuneena (saavutettavissa vain ramppi päällä) |
-| *Custom:* tighten over | 360 s | Kuinka kauan voimistuminen kestää (vain ramppi päällä) |
-| *Custom:* first pulse | 80 ms | Sykäyksen pituus alussa (vain ramppi päällä) |
-| *Custom:* pulse length | 700 ms | Sykäyksen pituus voimistuneena — ja heti ensimmäisestä purskeesta kun ramppi on pois |
-| *Custom:* first burst pulses | 1 | Sykäyksiä purskeessa alussa (vain ramppi päällä) |
-| *Custom:* pulses per buzz | 3 | Sykäyksiä purskeessa voimistuneena — ja heti ensimmäisestä purskeesta kun ramppi on pois |
-| *Custom:* sound joins after | 300 s | Milloin ääni alkaa. **Ei vaikutusta kellossa jossa ei ole kaiutinta** |
-| *Custom:* volume ramp | 300 s | Kuinka kauan voimakkuudella kestää saavuttaa maksiminsa. Vain kaiuttimellinen |
-| *Custom:* first volume | 15 | Voimakkuus kun ääni liittyy mukaan. Vain kaiuttimellinen |
-| *Custom:* max volume | 100 | Kovin mihin se yltää. Vain kaiuttimellinen |
-| *Custom:* give up after | 900 s | Kuinka kauan soitto kestää ennen kuin se lakkaa pitämästä ääntä |
+
+**"Wake style" on täsmälleen nämä kaksitoista lukua**, ja Custom-valinta lähtee
+liikkeelle Normal-sarakkeesta. Rinnakkain nähtynä ne ovat myös nopein tapa ymmärtää,
+missä esiasetukset oikeasti eroavat toisistaan:
+
+| *Custom*-asetus | Gentle | **Normal** | Insistent | Mitä se muuttaa |
+|---|---|---|---|---|
+| gap between buzzes | 45 s | 30 s | 15 s | Hiljaisuus purskeiden välillä alussa |
+| final gap | 10 s | 5 s | 3 s | Hiljaisuus purskeiden välillä täysin voimistuneena (vain ramppi päällä) |
+| tighten over | 600 s | 360 s | 180 s | Kuinka kauan voimistuminen kestää (vain ramppi päällä) |
+| first pulse | 60 ms | 80 ms | 200 ms | Sykäyksen pituus alussa (vain ramppi päällä) |
+| pulse length | 500 ms | 700 ms | 700 ms | Sykäyksen pituus voimistuneena — ja heti ensimmäisestä purskeesta kun ramppi on pois |
+| first burst pulses | 1 | 1 | 2 | Sykäyksiä purskeessa alussa (vain ramppi päällä) |
+| pulses per buzz | 3 | 3 | 3 | Sykäyksiä purskeessa voimistuneena — ja heti ensimmäisestä purskeesta kun ramppi on pois |
+| sound joins after | 480 s | 300 s | 60 s | Milloin ääni alkaa. **Ei vaikutusta kellossa jossa ei ole kaiutinta** |
+| volume ramp | 300 s | 300 s | 180 s | Kuinka kauan voimakkuudella kestää saavuttaa maksiminsa. Vain kaiuttimellinen |
+| first volume | 10 | 15 | 30 | Voimakkuus kun ääni liittyy mukaan. Vain kaiuttimellinen |
+| max volume | 70 | 100 | 100 | Kovin mihin se yltää. Vain kaiuttimellinen |
+| give up after | 1200 s | 900 s | 900 s | Kuinka kauan soitto kestää ennen kuin se lakkaa pitämästä ääntä |
+
+Sarakkeita alaspäin lukemalla esiasetukset ovat vähemmän erilaisia kuin niiden nimet
+antavat ymmärtää — varsinkin ramppi pois päältä, mikä kytkee pois ne neljä riviä
+jotka on merkitty *vain ramppi päällä* ja saa jokaisen purskeen alkamaan "pulse
+length"- ja "pulses per buzz" -arvoista. Kaiuttimettomassa kellossa neljä riviä
+lisää ei tee mitään, ja Gentlen ja Normalin ero kutistuu siihen, tuleeko identtisiä
+täysvoimaisia purskeita 45 vai 30 sekunnin välein.
 
 ### Snooze and stopping
 
