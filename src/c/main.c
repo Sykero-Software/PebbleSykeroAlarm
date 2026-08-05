@@ -62,8 +62,12 @@ static void close_to_watchface(void) {
 //
 // Every other wakeup that legitimately ends up showing nothing needs the same
 // treatment -- WC_WINDOW with no alarm left to arm, a WC_DEADLINE whose slot the
-// phone deleted, a window declined because a snooze is pending -- so the
-// condition is "no ring and no waiting window on the stack". Read from the
+// phone deleted -- so the condition is "no ring and no waiting window on the
+// stack". A window declined because a snooze is pending is deliberately NOT one
+// of these any more (2026-08-05): main()'s launch-time check pushes the snooze
+// screen in exactly that case, so by the time this guard runs the waiting
+// window IS on the stack and the condition below correctly does not arm --
+// the app stays up for the rest of the snooze, on purpose. Read from the
 // WINDOW STACK, never from s_ringing: this app has already produced one defect
 // from testing that proxy instead of what is actually on screen (over_cap clears
 // s_ringing while leaving the "Alarm missed" screen up).
@@ -924,9 +928,12 @@ static void main_window_unload(Window *w) {
 #define PENDING_WAITING 0
 #define PENDING_SNOOZED 1
 static void open_pending_window(int mode);
-// Forward declaration only (defined with the smart-window section's other
-// statics, below): start_ring, ~700 lines above, needs to check it too, to
-// hand the pending screen back once the ring it was covering for resumes.
+// A tentative definition, so start_ring (~700 lines above the smart-window
+// section's own statics) can check it too, to hand the pending screen back
+// once the ring it was covering for resumes. Its one real definition is
+// further down with the rest of the pending-screen state; only one of two
+// tentative definitions may carry an initializer and neither does, so this is
+// legal C (same idiom as s_ringing above).
 static Window *s_wait_window;
 
 // --- The ring: escalation, stop gestures, snooze. ---
