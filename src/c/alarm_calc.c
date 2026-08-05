@@ -408,3 +408,11 @@ AcCycleState ac_cycle_state(int8_t pending_slot, uint32_t window_started_at,
   }
   return st;
 }
+
+bool ac_cycle_is_stale(uint32_t window_started_at, uint32_t deadline_at,
+                       time_t occurrence_deadline) {
+  if (window_started_at == 0) {
+    return false;   // no live window: there is no stored deadline to trust
+  }
+  return deadline_at == 0 || (time_t)deadline_at != occurrence_deadline;
+}

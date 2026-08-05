@@ -2270,19 +2270,28 @@ static void handle_wakeup_cookie(int32_t cookie) {
         sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
         break;
       }
-      // Trust the STORED deadline only while the cycle it belongs to is
-      // actually live -- window_started_at != 0 is what makes it live. Without
-      // that conjunct a deadline_at left behind by a finished cycle (the
-      // whole-branch review's Critical 1) reads as "the deadline passed ~24 h
-      // ago" and rings instantly at window start, up to 60 minutes early, every
-      // night from the second onwards. runstate_end_cycle now clears the field
-      // at both sites that end a cycle; this guard is the second line of
-      // defence, so a future path that forgets cannot resurrect the bug.
-      // Deriving the deadline from `when` instead is always correct here -- it
-      // is the same computation sc_rearm used to place this very wakeup.
+      // The stored deadline is trusted ONLY when it is this occurrence's.
+      // Being "live" is not enough: a cycle can outlive the alarm that owned it
+      // (a pruned one-time alarm), and this handler would then apply that
+      // alarm's deadline to whatever occurrence it just resolved -- which is
+      // exactly how a 13:52 test alarm armed a 14:22 ring for a 07:50 alarm on
+      // 2026-08-05. A mismatch means the cycle is a leftover, so it is ended
+      // here, before anything reads it, and both the window start and the
+      // deadline are then derived from `when` like a fresh window's.
+      time_t derived = sc_ring_deadline(&s_cfg, when);
+      if (ac_cycle_is_stale(s_rs.window_started_at, s_rs.deadline_at, derived)) {
+        APP_LOG(APP_LOG_LEVEL_WARNING,
+                "stale cycle discarded: stored window=%lu deadline=%lu is not "
+                "occurrence %lu's (deadline %lu)",
+                (unsigned long)s_rs.window_started_at,
+                (unsigned long)s_rs.deadline_at, (unsigned long)when,
+                (unsigned long)derived);
+        runstate_end_cycle();
+        as_save_runstate(&s_rs);
+      }
       time_t ring = (s_rs.window_started_at != 0 && s_rs.deadline_at != 0)
                         ? (time_t)s_rs.deadline_at
-                        : sc_ring_deadline(&s_cfg, when);
+                        : derived;
       APP_LOG(APP_LOG_LEVEL_INFO,
               "WINDOW wakeup slot=%d now=%lu ring=%lu (stored window=%lu deadline=%lu)",
               slot, (unsigned long)now, (unsigned long)ring,
@@ -2298,6 +2307,18 @@ static void handle_wakeup_cookie(int32_t cookie) {
       }
       time_t win = s_rs.window_started_at != 0 ? (time_t)s_rs.window_started_at
                                                : sc_window_start(&s_cfg, when);
+      if (win > now) {
+        // A stray re-entry (or a cycle just discarded above) with the next
+        // occurrence's window still hours away. Opening it here would put a
+        // multi-hour "window" on the poll timer, whose 1-minute evaluation
+        // could fire on ordinary daytime movement. There is nothing to open:
+        // re-arm and let the real WC_WINDOW wakeup do it.
+        APP_LOG(APP_LOG_LEVEL_INFO,
+                "window for slot %d does not open until %lu -- re-arming only",
+                slot, (unsigned long)win);
+        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
+        break;
+      }
       open_smart_window(slot, win, ring);
       break;
     }

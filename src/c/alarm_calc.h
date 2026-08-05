@@ -279,4 +279,19 @@ AcCycleState ac_cycle_state(int8_t pending_slot, uint32_t window_started_at,
                             uint32_t ring_started_at, uint8_t snooze_count,
                             time_t now);
 
+// Does a live cycle's STORED deadline belong to the occurrence in hand?
+//
+// The window/re-entry wakeup handler used to trust RunState.deadline_at whenever
+// a window was live, on the reasoning that a live cycle owns a real deadline.
+// It does -- but not necessarily the deadline of the occurrence the handler has
+// just resolved. A one-time Test alarm pruned out from under its own cycle left
+// window=13:52/deadline=14:22 behind on 2026-08-05; the next re-entry resolved
+// the next unserved alarm (tomorrow 07:50), kept the 14:22 deadline, read
+// `now >= ring` that afternoon and rang a full escalating alarm nobody set.
+//
+// True means: a window is live and its stored deadline is NOT this occurrence's,
+// so the cycle is a leftover and must be ended before anything reads it.
+bool ac_cycle_is_stale(uint32_t window_started_at, uint32_t deadline_at,
+                       time_t occurrence_deadline);
+
 #endif

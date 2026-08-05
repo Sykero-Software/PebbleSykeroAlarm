@@ -649,6 +649,31 @@ int main(void) {
     assert(ac_cycle_state(0, 0, (uint32_t)now, 1, now) == AC_CYCLE_RINGING);
   }
 
+  // --- ac_cycle_is_stale: a stored deadline that belongs to another occurrence ---
+  {
+    const time_t dl_today = at(2026, 8, 5, 8, 20);
+    const time_t dl_tomorrow = at(2026, 8, 6, 8, 20);
+
+    // No window live: nothing to be stale about (the caller has no cycle to end).
+    assert(!ac_cycle_is_stale(0, 0, dl_tomorrow));
+    assert(!ac_cycle_is_stale(0, (uint32_t)dl_today, dl_tomorrow));
+
+    // A live window whose stored deadline IS this occurrence's: the normal
+    // mid-window re-entry. sc_rearm computed both from the same occurrence, so
+    // they are equal by construction.
+    assert(!ac_cycle_is_stale((uint32_t)at(2026, 8, 5, 7, 50),
+                             (uint32_t)dl_today, dl_today));
+
+    // The 2026-08-05 defect: a 13:52 Test alarm left window=13:52 deadline=14:22,
+    // and a re-entry re-adopted it for TOMORROW's 07:50 occurrence while keeping
+    // the 14:22 deadline -- which then rang that afternoon for nothing.
+    assert(ac_cycle_is_stale((uint32_t)at(2026, 8, 5, 13, 52),
+                            (uint32_t)at(2026, 8, 5, 14, 22), dl_tomorrow));
+
+    // A live window with NO stored deadline cannot be trusted either.
+    assert(ac_cycle_is_stale((uint32_t)at(2026, 8, 5, 7, 50), 0, dl_today));
+  }
+
   printf("test_alarm_calc: all assertions passed\n");
   return 0;
 }
