@@ -57,3 +57,12 @@ void sc_arm_reentry(time_t now);
 // pure and host-tested for all three semantics -- see alarm_calc.h.
 time_t sc_ring_deadline(const Config *cfg, time_t alarm_time);
 time_t sc_window_start(const Config *cfg, time_t alarm_time);
+
+// The two Config values resolved above, exposed for the callers that pass them
+// STRAIGHT to the pure math (ac_window_wakeup) rather than going through the two
+// wrappers. One owner: sc_window_active is the only place that folds the setting,
+// a zero window length and the platform's Health availability into "the smart
+// window is active", and sc_full_dev_s the only place that resolves the effective
+// escalation profile's full development time.
+bool sc_window_active(const Config *cfg);
+uint32_t sc_full_dev_s(const Config *cfg);

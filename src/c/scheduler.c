@@ -42,7 +42,14 @@ void sc_cancel_all(void) {
 // Resolve Config (and the platform's Health availability) into the parameters
 // the pure math takes, then defer to it. The health gate stays HERE because
 // PBL_IF_HEALTH_ELSE is an SDK macro and alarm_calc must compile on the host.
-static bool prv_window_active(const Config *cfg) {
+//
+// Not static since 2026-08-05: the window/re-entry handler's decision is pure
+// too now (ac_window_wakeup), and it needs the same two resolved values. Sharing
+// this one owner is the point -- main.c used to spell the gate out for itself as
+// `smart_enabled && PBL_IF_HEALTH_ELSE(true, false)`, WITHOUT the zero-length
+// half, so a window length of 0 read as "smart on" there and as "smart off"
+// everywhere else.
+bool sc_window_active(const Config *cfg) {
 #if PBL_IF_HEALTH_ELSE(1, 0)
   return cfg->smart_enabled && cfg->smart_window_min > 0;
 #else
@@ -50,7 +57,7 @@ static bool prv_window_active(const Config *cfg) {
 #endif
 }
 
-static uint32_t prv_full_dev_s(const Config *cfg) {
+uint32_t sc_full_dev_s(const Config *cfg) {
   if (cfg->time_semantics != SEMANTICS_AWAKE_BY) {
     return 0;   // nothing else reads it; skip resolving the profile
   }
@@ -60,13 +67,13 @@ static uint32_t prv_full_dev_s(const Config *cfg) {
 }
 
 time_t sc_ring_deadline(const Config *cfg, time_t alarm_time) {
-  return ac_ring_deadline(cfg->time_semantics, prv_window_active(cfg),
-                          cfg->smart_window_min, prv_full_dev_s(cfg), alarm_time);
+  return ac_ring_deadline(cfg->time_semantics, sc_window_active(cfg),
+                          cfg->smart_window_min, sc_full_dev_s(cfg), alarm_time);
 }
 
 time_t sc_window_start(const Config *cfg, time_t alarm_time) {
-  return ac_window_start(cfg->time_semantics, prv_window_active(cfg),
-                         cfg->smart_window_min, prv_full_dev_s(cfg), alarm_time);
+  return ac_window_start(cfg->time_semantics, sc_window_active(cfg),
+                         cfg->smart_window_min, sc_full_dev_s(cfg), alarm_time);
 }
 
 void sc_arm_reentry(time_t now) {

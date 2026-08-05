@@ -294,4 +294,59 @@ AcCycleState ac_cycle_state(int8_t pending_slot, uint32_t window_started_at,
 bool ac_cycle_is_stale(uint32_t window_started_at, uint32_t deadline_at,
                        time_t occurrence_deadline);
 
+// WHAT A WC_WINDOW / WC_REENTRY WAKEUP MUST DO.
+//
+// This is the whole decision the window/re-entry handler used to make inline in
+// main.c, and it is here for one reason: EVERY defect found in that block --
+// six of them across two rounds this week, including a phantom 14:22 alarm, a
+// lost day's alarm, a ring for a deleted alarm and a 180 s wake loop -- lived in
+// main.c, where nothing can reach it. The host assertions written alongside those
+// fixes exercised the arithmetic the handler happens to call (ac_cycle_is_stale,
+// ac_window_start, ...) and therefore passed identically against the buggy
+// handler. Only the DECISION is worth asserting, so the decision is what is pure.
+//
+// main.c is left a thin executor: build the inputs, call this, end the cycle if
+// asked, abandon a stranded waiting screen if asked, then act on `action`.
+typedef enum {
+  AC_WIN_REARM_ONLY = 0,  // nothing to open or ring: the caller re-arms and returns
+  AC_WIN_RING_NOW,        // the hard deadline is due: the caller rings from the deadline
+  AC_WIN_OPEN,            // open (or continue) the smart window
+} AcWindowAction;
+
+typedef struct {
+  AcWindowAction action;
+  int    slot;            // the alarm the decision is about; -1 when there is none
+  time_t window_start;    // AC_WIN_OPEN only
+  time_t deadline;        // AC_WIN_OPEN and AC_WIN_RING_NOW
+  bool   end_cycle;       // the caller must end the stored cycle before acting
+  bool   abandon_screen;  // the caller must cancel the poll and close a stranded
+                          // waiting screen (never set together with OPEN: that
+                          // path re-pushes and re-captions the screen itself)
+} AcWindowDecision;
+
+// `alarms`/`count` are the current alarm set, `now` the clock. The four config
+// values are exactly what ac_ring_deadline/ac_window_start take, so this module
+// stays free of SDK macros: `smart_window_active` must already fold in the
+// setting, a zero window length and whether the platform has Health at all
+// (scheduler.c's sc_window_active is the one owner of that), and `full_dev_s` is
+// the effective escalation's full development time, read only by
+// SEMANTICS_AWAKE_BY.
+//
+// pending_slot / window_started_at / ring_started_at / snooze_count / deadline_at
+// are RunState's five cycle fields, and served_slot / served_at its served
+// record. `pending_slot` is bounded against `count` HERE, so the caller does not
+// have to (an index the phone has deleted out from under a live cycle is no
+// owner at all -- see ac_cycle_state's AC_CYCLE_ORPHAN).
+//
+// The caller must NOT call this while an alarm is actually ringing: that state
+// belongs to main.c (s_ringing cannot be derived from RunState) and means "do
+// nothing at all", not "decide something".
+AcWindowDecision ac_window_wakeup(const Alarm *alarms, int count, time_t now,
+                                  uint8_t semantics, bool smart_window_active,
+                                  uint16_t window_min, uint32_t full_dev_s,
+                                  int8_t pending_slot, uint32_t window_started_at,
+                                  uint32_t ring_started_at, uint8_t snooze_count,
+                                  uint32_t deadline_at,
+                                  int served_slot, time_t served_at);
+
 #endif
