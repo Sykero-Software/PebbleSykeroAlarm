@@ -191,6 +191,17 @@ int main(void) {
     assert(n == 0);
   }
   {
+    // A NESTED span is legitimately newest-first even though its START moves
+    // forward, so it must take the absorb path, not the out-of-order fallback.
+    // (A start-based ordering test got this wrong: it returned 2000 -- the nested
+    // span's start -- instead of merging back to 1000.)
+    const SleepSpan nested[2] = { { 1000u, 5000u }, { 2000u, 3000u } };
+    SleepSpan gaps[SE_MAX_SESSIONS];
+    int n = -1;
+    assert(se_merge_sessions(nested, 2, 60u, gaps, SE_MAX_SESSIONS, &n) == 1000u);
+    assert(n == 0);
+  }
+  {
     // A malformed NEWEST span must not anchor the walk (it would fix the onset at
     // a bogus start and then measure every gap from it); the first well-formed
     // span does.

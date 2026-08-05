@@ -1716,8 +1716,20 @@ static void start_ring(int slot, bool from_deadline) {
   // they are still the fresh-launch zero defaults, so s_last_read.available
   // is false and NULL is passed -- which is what makes ns.smart_unavailable
   // true for a plain alarm's summary.
+  //
+  // A night the algorithm COULD NOT JUDGE counts as unavailable too, even though
+  // the health read itself succeeded: with insufficient_data there is no
+  // baseline, no trigger level and no alt-sensitivity answer, so passing the read
+  // through would render "Baseline 0 / Level 0 / Woke you at 07:50" and label the
+  // night `smart` in the history -- an evaluation that never happened, on the one
+  // screen the sensitivity setting is tuned from. Recording it as unavailable is
+  // the honest description and needs no new persisted field. NOTE the wrong fix
+  // here is passing from_deadline = true: that would stamp served_at = now while
+  // ac_is_served compares against this occurrence's deadline, so the occurrence
+  // would come back unserved and RING A SECOND TIME.
   if (s_rs.snooze_count == 0) {
-    record_night(&s_last_eval, s_last_read.available ? &s_last_read : NULL, from_deadline);
+    const bool judged = s_last_read.available && !s_last_eval.insufficient_data;
+    record_night(&s_last_eval, judged ? &s_last_read : NULL, from_deadline);
   }
 
   // Keep a wakeup live for the whole ring: if anything kills the app mid-ring
@@ -2133,10 +2145,26 @@ static void poll_cb(void *data) {
   if (s_rs.window_started_at == 0 || s_ringing) {
     return;
   }
+  // PRE-EXISTING HOLE, closed here because this function has three ring paths and
+  // all of them used to walk into it: `pending_slot` was handed to start_ring
+  // unbounded, so a cycle whose alarms were deleted mid-window indexed s_alarms
+  // out of range and rang a phantom -- the same class as the orphaned cycle
+  // batch 5 fixed in the WAKEUP path (`ac_window_wakeup` guards it; poll_cb never
+  // did). cycle_owner_slot() is the file's one definition of "does this cycle
+  // still own a real alarm". Stopping the poll without rescheduling is
+  // deliberate: the cycle is orphaned, and clearing it belongs to the launch
+  // repair and ac_cycle_state's AC_CYCLE_ORPHAN, not to a timer callback.
+  const int8_t slot = cycle_owner_slot();
+  if (slot < 0) {
+    APP_LOG(APP_LOG_LEVEL_WARNING,
+            "SMART poll: cycle has no owning alarm (pending_slot=%d of %d) -- stopping",
+            (int)s_rs.pending_slot, s_count);
+    return;
+  }
   time_t now = time(NULL);
   if (s_rs.deadline_at != 0 && now >= (time_t)s_rs.deadline_at) {
     APP_LOG(APP_LOG_LEVEL_INFO, "SMART deadline reached");
-    start_ring(s_rs.pending_slot, true);
+    start_ring(slot, true);
     return;
   }
   // Zero-initialised, not just declared: smart_should_ring returns false without
@@ -2144,7 +2172,7 @@ static void poll_cb(void *data) {
   SleepEvalResult r = {0};
   if (smart_should_ring(&r)) {
     APP_LOG(APP_LOG_LEVEL_INFO, "SMART firing early at acc=%lu", (unsigned long)r.acc);
-    start_ring(s_rs.pending_slot, false);
+    start_ring(slot, false);
     return;
   }
 
@@ -2185,9 +2213,8 @@ static void poll_cb(void *data) {
   // path stays in charge.
   if ((!s_last_read.available || s_last_read.window_start < 0 || r.insufficient_data)
       && s_cfg.time_semantics == SEMANTICS_RING_FROM) {
-    int8_t slot = cycle_owner_slot();
     time_t set_time = 0;
-    if (slot >= 0 && s_rs.window_started_at != 0) {
+    if (s_rs.window_started_at != 0) {
       Alarm probe = s_alarms[slot];
       probe.enabled = true;
       probe.skip_next = false;
@@ -2197,7 +2224,7 @@ static void poll_cb(void *data) {
       APP_LOG(APP_LOG_LEVEL_INFO,
               "SMART cannot judge (avail=%d insuf=%d) -- ringing at the set time",
               (int)s_last_read.available, (int)r.insufficient_data);
-      start_ring(s_rs.pending_slot, false);
+      start_ring(slot, false);
       return;
     }
     APP_LOG(APP_LOG_LEVEL_INFO,

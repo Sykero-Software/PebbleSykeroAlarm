@@ -47,27 +47,39 @@ uint32_t se_merge_sessions(const SleepSpan *spans, int n, uint32_t max_gap_s,
   // walking an oldest-first list would take spans[0] (the oldest) as the onset
   // and then absorb every later span as an "overlap", returning the whole night
   // with NO gaps recorded -- every awake minute in the population, which is the
-  // exact contamination this function exists to prevent. Fall back to the newest
-  // session alone, which is the safe (pre-merge) behaviour.
-  for (int i = 1; i < n; i++) {
-    if (spans[i].start > spans[i - 1].start) {
-      uint32_t newest = spans[0].start;
-      for (int k = 1; k < n; k++) {
-        if (spans[k].start > newest) {
+  // exact contamination this function exists to prevent.
+  // Tested on END, and only between WELL-FORMED spans. Both details were wrong
+  // once and each produced a different mis-merge:
+  //   - on START, a NESTED span (a session reported inside another) trips the
+  //     fallback, because nesting legitimately moves the start FORWARD while the
+  //     list is still newest-first. Ends descend in both the ordinary and the
+  //     nested case, and ascend exactly when the list is oldest-first.
+  //   - counting a malformed (end <= start) span as evidence of order makes a
+  //     zero-length span in the middle of a good list look ascending, which sent
+  //     an ordinary night down the fallback and dropped the merge entirely.
+  int first = -1;
+  uint32_t prev_end = 0;
+  for (int i = 0; i < n; i++) {
+    if (spans[i].end <= spans[i].start) {
+      continue;
+    }
+    if (first < 0) {
+      first = i;
+    } else if (spans[i].end > prev_end) {
+      // Not newest-first. Do not guess: the newest session alone is the safe
+      // (pre-merge) answer.
+      uint32_t newest = 0;
+      for (int k = 0; k < n; k++) {
+        if (spans[k].end > spans[k].start && spans[k].start > newest) {
           newest = spans[k].start;
         }
       }
       return newest;
     }
+    prev_end = spans[i].end;
   }
-  // A malformed newest span cannot anchor the walk either: skip to the first
-  // well-formed one (older spans are checked in the loop below).
-  int first = 0;
-  while (first < n && spans[first].end <= spans[first].start) {
-    first++;
-  }
-  if (first >= n) {
-    return 0;
+  if (first < 0) {
+    return 0;   // nothing well-formed to anchor on
   }
   uint32_t onset = spans[first].start;
   for (int i = first + 1; i < n; i++) {
@@ -75,8 +87,9 @@ uint32_t se_merge_sessions(const SleepSpan *spans, int n, uint32_t max_gap_s,
       continue;   // malformed span: ignore rather than let it end the night
     }
     if (spans[i].end >= onset) {
-      // Overlapping or adjacent with no gap at all (also the defensive case of
-      // spans that are not strictly newest-first): absorb it, no awake stretch.
+      // Overlapping, nested, or adjacent with no gap at all: absorb it, no awake
+      // stretch. (Out-of-order lists no longer reach here -- the ordering check
+      // above returns before the walk starts.)
       if (spans[i].start < onset) {
         onset = spans[i].start;
       }
