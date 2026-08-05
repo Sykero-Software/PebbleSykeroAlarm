@@ -1605,7 +1605,17 @@ static void start_ring(int slot, bool from_deadline) {
     });
     window_set_click_config_provider(s_ring_window, ring_click_config);
   }
-  window_stack_push(s_ring_window, false);
+  // Guarded like the s_wait_window removal just below: burst_cb's over_cap
+  // branch deliberately LEAVES its "Alarm missed" s_ring_window on the stack
+  // (see burst_cb) and does not end the cycle, so that window can still be
+  // sitting there, unreached by any button, when a LATER cycle event (another
+  // alarm's WC_WINDOW, or the same alarm's occurrence the next day) calls
+  // start_ring again. Without this guard that would push the very same
+  // Window* a second time onto a stack it is already on -- pushing an
+  // already-created window that is already on the stack is what this avoids.
+  if (!window_stack_contains_window(s_ring_window)) {
+    window_stack_push(s_ring_window, false);
+  }
   // The pending screen has done its job -- the smart window's wait, or the
   // snooze this ring is resuming from. Take it off the stack now that the ring
   // is on top, rather than leaving it buried underneath for the rest of the
