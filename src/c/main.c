@@ -2321,10 +2321,15 @@ static void handle_wakeup_cookie(int32_t cookie) {
       // window it then tries to open is declined by open_smart_window's own
       // snooze check (which is the one owner of that rule).
       int slot = -1;
+      // Did `slot` come from the live cycle itself, i.e. does it OWN that cycle?
+      // Only then may the cycle's stored fields be interpreted through this
+      // alarm's occurrence grid (see the staleness probe below).
+      bool cycle_slot = false;
       if (ac_cycle_state(cycle_owner_slot(), s_rs.window_started_at,
                          s_rs.ring_started_at, s_rs.snooze_count,
                          now) == AC_CYCLE_WINDOW) {
         slot = s_rs.pending_slot;
+        cycle_slot = true;
       }
       if (slot < 0) {
         slot = ac_next_alarm(s_alarms, s_count, now - 60, &when);
@@ -2375,8 +2380,8 @@ static void handle_wakeup_cookie(int32_t cookie) {
       // alarm's deadline to whatever occurrence it just resolved -- which is
       // exactly how a 13:52 test alarm armed a 14:22 ring for a 07:50 alarm on
       // 2026-08-05. A mismatch means the cycle is a leftover, so it is ended
-      // here, before anything reads it, and both the window start and the
-      // deadline are then derived from `when` like a fresh window's.
+      // here, before anything reads it, and the window is then re-derived from
+      // the cycle's OWN occurrence (see `basis` below).
       //
       // THE CYCLE'S OWN occurrence, not the next one after now. Under
       // SEMANTICS_RING_FROM the window runs [T, T+w], so a re-entry INSIDE a
@@ -2388,45 +2393,96 @@ static void handle_wakeup_cookie(int32_t cookie) {
       // alarm's grid, not about its current on/off state (a cycle for an
       // alarm the user disabled mid-window must keep its previous behaviour,
       // not be discarded by this guard).
+      //
+      // ONLY for the alarm that OWNS the cycle (cycle_slot). Probing a cycle's
+      // stored window start against a DIFFERENT alarm's grid answers a question
+      // nobody asked, and the answer is dangerous: it would let this handler
+      // adopt the foreign alarm's occurrence as the basis below and, if the
+      // orphan's window start is old enough, ring an occurrence that is already
+      // hours past. An unowned live cycle leaves cycle_deadline 0, which
+      // ac_cycle_is_stale reports stale -- which is right, and is what ends it.
+      time_t cycle_when = 0;
       time_t cycle_deadline = 0;
-      if (s_rs.window_started_at != 0 && slot >= 0 && slot < s_count) {
+      if (cycle_slot && s_rs.window_started_at != 0 && slot >= 0 && slot < s_count) {
         Alarm probe = s_alarms[slot];
         probe.enabled = true;
         probe.skip_next = false;
-        time_t cycle_when = ac_next_occurrence(&probe, (time_t)s_rs.window_started_at - 1);
+        cycle_when = ac_next_occurrence(&probe, (time_t)s_rs.window_started_at - 1);
         if (cycle_when != 0) {
           cycle_deadline = sc_ring_deadline(&s_cfg, cycle_when);
         }
       }
-      time_t derived = sc_ring_deadline(&s_cfg, when);
-      if (ac_cycle_is_stale(s_rs.window_started_at, s_rs.deadline_at, cycle_deadline)) {
+      bool discarded = ac_cycle_is_stale(s_rs.window_started_at, s_rs.deadline_at,
+                                         cycle_deadline);
+      if (discarded) {
         APP_LOG(APP_LOG_LEVEL_WARNING,
-                "stale cycle discarded: stored window=%lu deadline=%lu is not "
-                "occurrence %lu's (deadline %lu)",
+                "stale cycle discarded: stored window=%lu deadline=%lu is not its "
+                "own occurrence %lu's (deadline %lu)",
                 (unsigned long)s_rs.window_started_at,
-                (unsigned long)s_rs.deadline_at, (unsigned long)when,
-                (unsigned long)derived);
+                (unsigned long)s_rs.deadline_at, (unsigned long)cycle_when,
+                (unsigned long)cycle_deadline);
         runstate_end_cycle();
         as_save_runstate(&s_rs);
       }
-      time_t ring = (s_rs.window_started_at != 0 && s_rs.deadline_at != 0)
-                        ? (time_t)s_rs.deadline_at
-                        : derived;
+      // THE OCCURRENCE A FRESH WINDOW/RING IS DERIVED FROM.
+      //
+      // After a discard that is the cycle's OWN occurrence (cycle_when), never
+      // `when`. Two defects, one cause -- `when` is the wrong occurrence here:
+      //
+      //  * `when` is 0 for a disabled slot, and a ring instant derived from 0 is
+      //    an epoch-era value, i.e. always <= now: deleting an alarm mid-window
+      //    (which leaves a disabled one-time row in its slot) discarded the cycle
+      //    and then started a full escalating alarm, immediately, for the alarm
+      //    the user had just deleted.
+      //  * under SEMANTICS_RING_FROM the live window is [T, T+w], so inside it
+      //    `when` is TOMORROW's occurrence: after a mid-window config change the
+      //    cycle was discarded and then re-armed for tomorrow only, so the alarm
+      //    never rang today (sc_rearm's own ac_next_alarm_unserved skips today's
+      //    past occurrence too). The spec says a mid-window config change restarts
+      //    the cycle from the new config -- so the SAME occurrence must be
+      //    re-opened, which is what cycle_when is.
+      //
+      // `live` is read AFTER the discard on purpose: runstate_end_cycle has zeroed
+      // the stored fields by then, so a discarded cycle correctly falls through to
+      // the derived values instead of re-reading its own dead ones.
+      time_t basis = discarded ? cycle_when : when;
+      bool live = (s_rs.window_started_at != 0 && s_rs.deadline_at != 0);
+      if (!live && basis == 0) {
+        // There is no occurrence to derive anything from: the slot has no future
+        // occurrence (a disabled or spent one-time alarm), or the discarded cycle
+        // had no owning alarm at all. Nothing this handler can do -- and above all
+        // NOT a ring computed from 0.
+        APP_LOG(APP_LOG_LEVEL_WARNING,
+                "WINDOW wakeup for slot %d has no occurrence to open (discarded=%d)"
+                " -- re-arming only", slot, (int)discarded);
+        if (discarded) {
+          abandon_waiting_screen();
+        }
+        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
+        break;
+      }
+      time_t ring = live ? (time_t)s_rs.deadline_at : sc_ring_deadline(&s_cfg, basis);
       APP_LOG(APP_LOG_LEVEL_INFO,
-              "WINDOW wakeup slot=%d now=%lu ring=%lu (stored window=%lu deadline=%lu)",
-              slot, (unsigned long)now, (unsigned long)ring,
+              "WINDOW wakeup slot=%d now=%lu ring=%lu basis=%lu "
+              "(stored window=%lu deadline=%lu)",
+              slot, (unsigned long)now, (unsigned long)ring, (unsigned long)basis,
               (unsigned long)s_rs.window_started_at, (unsigned long)s_rs.deadline_at);
       if (now >= ring) {
+        // start_ring takes the waiting screen off the stack itself, so a discard
+        // needs no cleanup on this path.
         start_ring(slot, true);
         break;
       }
       bool smart_on = s_cfg.smart_enabled && PBL_IF_HEALTH_ELSE(true, false);
       if (!smart_on) {
+        if (discarded) {
+          abandon_waiting_screen();
+        }
         sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
         break;
       }
-      time_t win = s_rs.window_started_at != 0 ? (time_t)s_rs.window_started_at
-                                               : sc_window_start(&s_cfg, when);
+      time_t win = live ? (time_t)s_rs.window_started_at
+                        : sc_window_start(&s_cfg, basis);
       if (win > now) {
         // A stray re-entry (or a cycle just discarded above) with the next
         // occurrence's window still hours away. Opening it here would put a
@@ -2436,9 +2492,15 @@ static void handle_wakeup_cookie(int32_t cookie) {
         APP_LOG(APP_LOG_LEVEL_INFO,
                 "window for slot %d does not open until %lu -- re-arming only",
                 slot, (unsigned long)win);
+        if (discarded) {
+          abandon_waiting_screen();
+        }
         sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
         break;
       }
+      // The one path where a discard must NOT close the waiting screen: the same
+      // window is being re-opened under the new config, and open_smart_window
+      // re-pushes and re-captions the screen itself.
       open_smart_window(slot, win, ring);
       break;
     }

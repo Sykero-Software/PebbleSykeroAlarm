@@ -737,6 +737,61 @@ int main(void) {
       assert(ac_cycle_is_stale((uint32_t)win_start_today, (uint32_t)dl_today,
                                wrong_deadline));
     }
+
+    // 4. A live cycle with NO OWNING ALARM is never probed at all: main.c runs
+    // the occurrence probe only for the alarm that owns the cycle (a foreign
+    // alarm's grid answers a question nobody asked, and adopting its occurrence
+    // could ring an instant already hours past). So production passes
+    // occurrence_deadline 0 for an unowned cycle -- which must read as stale, so
+    // that the orphan of case 2 is still ended even when the alarm that left it
+    // behind has been pruned away.
+    {
+      const time_t win_start_orphan = at(2026, 8, 5, 13, 52);
+      const time_t dl_orphan = at(2026, 8, 5, 14, 22);
+      assert(ac_cycle_is_stale((uint32_t)win_start_orphan, (uint32_t)dl_orphan, 0));
+    }
+
+    // 5. WHAT A DISCARDED CYCLE IS RESTARTED FROM. The cycle's own occurrence is
+    // not only what the staleness comparison is made against -- it is also the
+    // basis main.c re-derives the fresh window and deadline from once the stale
+    // cycle has been ended. A mid-window config change (the smart window shortened
+    // 30 -> 20 at 07:55) must re-open the SAME window under the new config:
+    {
+      const time_t now_mid_window = at(2026, 8, 5, 7, 58);
+      const uint16_t new_window_min = 20;
+      time_t cycle_when = ac_next_occurrence(&daily, win_start_today - 1);
+      assert(cycle_when == at(2026, 8, 5, 7, 50));          // today's -- the cycle's own
+      // Stale under the new config (08:10 != the stored 08:20), so the cycle is
+      // discarded...
+      time_t new_deadline = ac_ring_deadline(SEMANTICS_RING_FROM, true,
+                                            new_window_min, full_dev_s, cycle_when);
+      assert(new_deadline == at(2026, 8, 5, 8, 10));
+      assert(ac_cycle_is_stale((uint32_t)win_start_today, (uint32_t)dl_today,
+                               new_deadline));
+      // ...and re-opened for the same occurrence, window start unchanged and
+      // already reached, so it opens immediately rather than being lost.
+      time_t new_win = ac_window_start(SEMANTICS_RING_FROM, true,
+                                       new_window_min, full_dev_s, cycle_when);
+      assert(new_win == win_start_today);
+      assert(new_win <= now_mid_window && new_deadline > now_mid_window);
+
+      // Deriving the restart from "the next occurrence after now" instead loses
+      // the day's alarm entirely: its window does not open until TOMORROW, so the
+      // handler can only re-arm -- which is the defect this basis fixes.
+      time_t wrong_when = ac_next_occurrence(&daily, now_mid_window - 60);
+      assert(wrong_when == at(2026, 8, 6, 7, 50));
+      assert(ac_window_start(SEMANTICS_RING_FROM, true, new_window_min,
+                             full_dev_s, wrong_when) > now_mid_window);
+
+      // And a disabled slot has no occurrence at all, so `when` is 0 there: a
+      // ring instant derived from it is an epoch-era value, i.e. ALWAYS already
+      // past -- which is why main.c must never compute one from 0.
+      Alarm disabled = daily;
+      disabled.enabled = false;
+      assert(ac_next_occurrence(&disabled, now_mid_window - 60) == 0);
+      assert(ac_ring_deadline(SEMANTICS_RING_FROM, true, new_window_min,
+                              full_dev_s, 0) < now_mid_window);
+    }
   }
 
   printf("test_alarm_calc: all assertions passed\n");
