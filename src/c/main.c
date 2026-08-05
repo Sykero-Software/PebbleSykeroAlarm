@@ -1777,6 +1777,14 @@ static void wait_window_update(void) {
   } else if (s_rs.smart_unavailable) {
     snprintf(sub, sizeof(sub), "Alarm %02d:%02d\nSmart alarm unavailable",
              dtm->tm_hour, dtm->tm_min);
+  } else if (menu_cycle_state() == AC_CYCLE_RINGING) {
+    // Force-quitting a ringing alarm (long BACK) leaves the ring cycle live
+    // with no window and no snooze, and the keep-alive wakeup resumes it within
+    // SC_REENTRY_GAP_S. Reached from the new Ongoing row, this screen would
+    // otherwise claim to be "waiting for light sleep" for an alarm that is
+    // mid-ring -- the one caption a half-awake user must be able to trust.
+    snprintf(sub, sizeof(sub), "Alarm %02d:%02d\nAlarm in progress",
+             dtm->tm_hour, dtm->tm_min);
   } else {
     snprintf(sub, sizeof(sub), "Alarm %02d:%02d\nWaiting for light sleep",
              dtm->tm_hour, dtm->tm_min);
