@@ -604,8 +604,48 @@ static AcWindowDecision prv_window_wakeup(
       : ac_ring_deadline(semantics, smart_window_active, window_min, full_dev_s,
                          basis);
   if (now >= ring) {
-    d.action = AC_WIN_RING_NOW;
-    d.deadline = ring;
+    // ON THE DISCARDED PATH, AN INSTANT ALREADY BEHIND `now` IS NOT A DEADLINE TO
+    // RING -- IT IS A CYCLE THAT IS OVER.
+    //
+    // The restart basis is derived from `window_started_at - 1`, so unlike the
+    // basis a non-discarded path uses (always > now - 60) it can be arbitrarily
+    // far behind `now`. Default semantics, a 07:50 daily alarm whose window opened
+    // at 07:20: at 07:40 the user edits that alarm on the phone to 07:30, meaning
+    // TOMORROW. The next re-entry finds the cycle stale (this occurrence's
+    // deadline is 07:30 now, not 07:50), ends it, re-derives from today 07:30 --
+    // and `now >= ring` then started a full escalating alarm on the spot, for an
+    // alarm time the user had just moved into the past. The same edit made one
+    // minute BEFORE the window opened arms it for tomorrow, and an open window
+    // must not change that.
+    //
+    // GATED ON THE BASIS, NOT ON THE DEADLINE, so SEMANTICS_AWAKE_BY keeps
+    // working: there the deadline is the alarm time MINUS the escalation ramp, so
+    // a deadline behind `now` with the occurrence still ahead means the ramp
+    // genuinely must already be running, and ringing at once is correct.
+    //
+    // The RING_FROM re-open is untouched (it is the reason this is not simply
+    // "never ring from a past basis"): that cycle's basis -- its window start -- is
+    // behind `now` by design, but its deadline is basis + the window, still ahead,
+    // so it never reaches this branch at all and falls through to AC_WIN_OPEN
+    // below, which is how the day's alarm survives a mid-window config change.
+    //
+    // Nothing is lost by not ringing here: the caller re-arms, and a deadline is
+    // armed in its own right (sc_rearm's priority 1) the moment the config
+    // changes. A deadline missed by more than the served tolerance does not ring
+    // on the WC_DEADLINE path either -- ac_dispatch_wakeup requires it inside
+    // +/- AC_SERVED_TOLERANCE_S -- so this is that same rule, applied to a path
+    // that could otherwise reach back hours.
+    //
+    // ONLY on the discarded path, and `discarded` is the test rather than `!live`:
+    // a wakeup arriving with NO live cycle derives its basis from `now - 60`, so
+    // its basis is at most a minute behind and a ring is then exactly right -- a
+    // WC_WINDOW that E_RANGE shifted onto the alarm time, or a re-entry seconds
+    // after it. Blocking that (which `!live` did in the first draft of this fix)
+    // is a missed wake-up, and case 8's own control assertion caught it.
+    if (!discarded || basis > now) {
+      d.action = AC_WIN_RING_NOW;
+      d.deadline = ring;
+    }
     return d;
   }
   if (!smart_window_active) {
