@@ -313,6 +313,22 @@ typedef enum {
   AC_WIN_OPEN,            // open (or continue) the smart window
 } AcWindowAction;
 
+// WHY an AC_WIN_REARM_ONLY decision was made. Before this existed, all six
+// distinct rearm-only paths logged identically (main.c printed only the
+// decision, not the reasoning), which cost real debugging time -- every defect
+// in this handler this week was found from pebble logs. One enum, set by the
+// pure function that already does the reasoning, so the log can show WHY
+// without main.c re-deriving or restating any of it.
+typedef enum {
+  AC_WIN_REASON_NONE = 0,       // the decision is to ring or to open: no reason needed
+  AC_WIN_REASON_NO_SLOT,        // no alarm to act on at all
+  AC_WIN_REASON_SERVED,         // this occurrence has already rung
+  AC_WIN_REASON_NO_OCCURRENCE,  // no occurrence to restart a discarded cycle from
+  AC_WIN_REASON_BASIS_PAST,     // the discarded cycle's own instant is behind now
+  AC_WIN_REASON_SMART_OFF,      // the smart window is switched off
+  AC_WIN_REASON_WINDOW_AHEAD,   // the window has not opened yet
+} AcWindowReason;
+
 typedef struct {
   AcWindowAction action;
   int    slot;            // the alarm the decision is about; -1 when there is none
@@ -322,6 +338,9 @@ typedef struct {
   bool   abandon_screen;  // the caller must cancel the poll and close a stranded
                           // waiting screen (never set together with OPEN: that
                           // path re-pushes and re-captions the screen itself)
+  AcWindowReason reason;  // WHY, for AC_WIN_REARM_ONLY; AC_WIN_REASON_NONE otherwise
+  time_t basis;           // the instant the decision was derived from; 0 when there
+                          // is none (a log could not otherwise show this at all)
 } AcWindowDecision;
 
 // `alarms`/`count` are the current alarm set, `now` the clock. The four config

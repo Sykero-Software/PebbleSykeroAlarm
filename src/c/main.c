@@ -2323,15 +2323,21 @@ static void handle_wakeup_cookie(int32_t cookie) {
           (int)s_rs.served_slot, (time_t)s_rs.served_at);
       // The log line the last two rounds of bugs were actually found in. It now
       // reports the DECISION plus the state it was made from, so every branch is
-      // still distinguishable after the fact: end_cycle=1 with action=0 is a
-      // discarded or unowned cycle, action=1 is a ring from `deadline`, action=2
-      // an open/continue of [window, deadline].
+      // still distinguishable after the fact: action=1 is a ring from `deadline`,
+      // action=2 an open/continue of [window, deadline], and action=0 (rearm only)
+      // is disambiguated by `reason` (AcWindowReason in alarm_calc.h) rather than
+      // collapsing every one of its six causes -- no slot, already served, no
+      // occurrence to restart from, a discarded cycle's basis behind `now`, the
+      // smart window off, or its window not yet open -- into the same line.
+      // `basis` is the instant the decision was actually derived from (0 when
+      // there is none), which a log could not otherwise show at all.
       APP_LOG(APP_LOG_LEVEL_INFO,
               "WINDOW wakeup action=%d slot=%d now=%lu window=%lu deadline=%lu "
-              "end_cycle=%d abandon=%d (stored slot=%d window=%lu deadline=%lu "
-              "ring=%lu snooze=%d)",
+              "reason=%d basis=%lu end_cycle=%d abandon=%d (stored slot=%d "
+              "window=%lu deadline=%lu ring=%lu snooze=%d)",
               (int)wd.action, wd.slot, (unsigned long)now,
               (unsigned long)wd.window_start, (unsigned long)wd.deadline,
+              (int)wd.reason, (unsigned long)wd.basis,
               (int)wd.end_cycle, (int)wd.abandon_screen,
               (int)s_rs.pending_slot, (unsigned long)s_rs.window_started_at,
               (unsigned long)s_rs.deadline_at,

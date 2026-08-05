@@ -430,7 +430,8 @@ static AcWindowDecision prv_window_wakeup(
     int served_slot, time_t served_at) {
   AcWindowDecision d = { .action = AC_WIN_REARM_ONLY, .slot = -1,
                          .window_start = 0, .deadline = 0,
-                         .end_cycle = false, .abandon_screen = false };
+                         .end_cycle = false, .abandon_screen = false,
+                         .reason = AC_WIN_REASON_NONE, .basis = 0 };
   if (alarms == NULL) {
     count = 0;
   }
@@ -502,6 +503,7 @@ static AcWindowDecision prv_window_wakeup(
     // window_started_at, so a snooze never has a live window and can never reach
     // this).
     d.end_cycle = (window_started_at != 0);
+    d.reason = AC_WIN_REASON_NO_SLOT;
     return d;
   }
   // NEVER re-open a window, or ring, for an occurrence that has ALREADY RUNG.
@@ -512,6 +514,8 @@ static AcWindowDecision prv_window_wakeup(
   // The stored cycle is deliberately left alone here: this wakeup was simply
   // consumed, and nothing about a served occurrence says the cycle is invalid.
   if (ac_is_served(when, slot, served_slot, served_at, lead_s)) {
+    d.reason = AC_WIN_REASON_SERVED;
+    d.basis = when;
     return d;
   }
   // The stored deadline is trusted ONLY when it is this occurrence's. Being
@@ -590,6 +594,7 @@ static AcWindowDecision prv_window_wakeup(
   //    new config -- so the SAME occurrence must be re-opened, which is what
   //    restart_when is.
   const time_t basis = discarded ? restart_when : when;
+  d.basis = basis;
   if (!live && basis == 0) {
     // There is no occurrence to derive anything from: the slot has no future
     // occurrence (it is disabled -- deleting an alarm on the phone leaves a
@@ -597,6 +602,7 @@ static AcWindowDecision prv_window_wakeup(
     // discarded cycle had no owning alarm at all. Nothing to do -- and above all
     // NOT a ring computed from 0, which would be an epoch-era instant and
     // therefore fire a full escalating alarm at once.
+    d.reason = AC_WIN_REASON_NO_OCCURRENCE;
     return d;
   }
   const time_t ring = live
@@ -666,10 +672,13 @@ static AcWindowDecision prv_window_wakeup(
     if (!discarded || basis > now) {
       d.action = AC_WIN_RING_NOW;
       d.deadline = ring;
+    } else {
+      d.reason = AC_WIN_REASON_BASIS_PAST;
     }
     return d;
   }
   if (!smart_window_active) {
+    d.reason = AC_WIN_REASON_SMART_OFF;
     return d;
   }
   const time_t win = live
@@ -682,6 +691,7 @@ static AcWindowDecision prv_window_wakeup(
     // multi-hour "window" on the poll timer, whose 1-minute evaluation could fire
     // on ordinary daytime movement. There is nothing to open: re-arm and let the
     // real WC_WINDOW wakeup do it.
+    d.reason = AC_WIN_REASON_WINDOW_AHEAD;
     return d;
   }
   d.action = AC_WIN_OPEN;
