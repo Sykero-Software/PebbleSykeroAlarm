@@ -2403,14 +2403,27 @@ static void handle_wakeup_cookie(int32_t cookie) {
       // ac_cycle_is_stale reports stale -- which is right, and is what ends it.
       time_t cycle_when = 0;
       time_t cycle_deadline = 0;
+      // ...and, from the SAME search base, the same occurrence as the alarm
+      // ACTUALLY IS NOW -- enabled and skip_next honoured. That is what a restart
+      // may be derived from (`basis` below); the forced probe above may not be.
+      // The force exists only to answer "does the stored deadline fit this alarm's
+      // grid", and using its answer to open a NEW window would ring an alarm the
+      // user has switched off or deleted: a deleted alarm leaves a DISABLED
+      // one-time row in its slot, whose minute_of_day is its own, so the forced
+      // probe happily returns that row's next occurrence -- a ring nobody set, at
+      // a time nobody chose. 0 here (disabled, or a spent one-time) means there is
+      // nothing to re-open, which is the correct outcome for exactly that case.
+      time_t restart_when = 0;
       if (cycle_slot && s_rs.window_started_at != 0 && slot >= 0 && slot < s_count) {
+        time_t base = (time_t)s_rs.window_started_at - 1;
         Alarm probe = s_alarms[slot];
         probe.enabled = true;
         probe.skip_next = false;
-        cycle_when = ac_next_occurrence(&probe, (time_t)s_rs.window_started_at - 1);
+        cycle_when = ac_next_occurrence(&probe, base);
         if (cycle_when != 0) {
           cycle_deadline = sc_ring_deadline(&s_cfg, cycle_when);
         }
+        restart_when = ac_next_occurrence(&s_alarms[slot], base);
       }
       bool discarded = ac_cycle_is_stale(s_rs.window_started_at, s_rs.deadline_at,
                                          cycle_deadline);
@@ -2426,7 +2439,7 @@ static void handle_wakeup_cookie(int32_t cookie) {
       }
       // THE OCCURRENCE A FRESH WINDOW/RING IS DERIVED FROM.
       //
-      // After a discard that is the cycle's OWN occurrence (cycle_when), never
+      // After a discard that is the cycle's OWN occurrence (restart_when), never
       // `when`. Two defects, one cause -- `when` is the wrong occurrence here:
       //
       //  * `when` is 0 for a disabled slot, and a ring instant derived from 0 is
@@ -2440,18 +2453,20 @@ static void handle_wakeup_cookie(int32_t cookie) {
       //    never rang today (sc_rearm's own ac_next_alarm_unserved skips today's
       //    past occurrence too). The spec says a mid-window config change restarts
       //    the cycle from the new config -- so the SAME occurrence must be
-      //    re-opened, which is what cycle_when is.
+      //    re-opened, which is what restart_when is.
       //
       // `live` is read AFTER the discard on purpose: runstate_end_cycle has zeroed
       // the stored fields by then, so a discarded cycle correctly falls through to
       // the derived values instead of re-reading its own dead ones.
-      time_t basis = discarded ? cycle_when : when;
+      time_t basis = discarded ? restart_when : when;
       bool live = (s_rs.window_started_at != 0 && s_rs.deadline_at != 0);
       if (!live && basis == 0) {
         // There is no occurrence to derive anything from: the slot has no future
-        // occurrence (a disabled or spent one-time alarm), or the discarded cycle
-        // had no owning alarm at all. Nothing this handler can do -- and above all
-        // NOT a ring computed from 0.
+        // occurrence (it is disabled -- deleting an alarm on the phone leaves a
+        // disabled one-time row behind -- or it is a spent one-time), or the
+        // discarded cycle had no owning alarm at all. Nothing this handler can do
+        // -- and above all NOT a ring computed from 0, which would be an
+        // epoch-era instant and therefore fire a full escalating alarm at once.
         APP_LOG(APP_LOG_LEVEL_WARNING,
                 "WINDOW wakeup for slot %d has no occurrence to open (discarded=%d)"
                 " -- re-arming only", slot, (int)discarded);

@@ -791,6 +791,22 @@ int main(void) {
       assert(ac_next_occurrence(&disabled, now_mid_window - 60) == 0);
       assert(ac_ring_deadline(SEMANTICS_RING_FROM, true, new_window_min,
                               full_dev_s, 0) < now_mid_window);
+
+      // THE RESTART BASIS IS THE ALARM AS IT ACTUALLY IS, not the forced probe.
+      // The staleness probe forces enabled/skip_next so it can ask about the
+      // alarm's GRID (deliberate: a cycle for an alarm switched off mid-window
+      // keeps its previous behaviour). Its occurrence must never become the basis
+      // for OPENING a window, because deleting an alarm on the phone leaves a
+      // DISABLED one-time row in that slot -- with its own minute_of_day, so the
+      // forced probe cheerfully returns an occurrence and a window would be opened
+      // for an alarm that no longer exists. Read from the same base without the
+      // force, a deleted/disabled slot yields 0, i.e. nothing to re-open:
+      Alarm deleted_row = { .minute_of_day = 7 * 60 + 52, .weekday_mask = 0,
+                            .enabled = false };
+      Alarm forced = deleted_row;
+      forced.enabled = true;
+      assert(ac_next_occurrence(&forced, win_start_today - 1) != 0);   // the trap
+      assert(ac_next_occurrence(&deleted_row, win_start_today - 1) == 0);
     }
   }
 
