@@ -911,6 +911,24 @@ static void main_window_unload(Window *w) {
   s_main_menu = NULL;
 }
 
+// --- The pending screen's two modes -------------------------------------------
+//
+// ONE window serves both "the smart window is open, waiting for light sleep" and
+// "a snooze is in flight" (2026-08-05 spec). They want the same layout (big
+// clock, two-line caption, a permanent key legend) and the same contract -- DOWN
+// 2x cancels this alarm, BACK 2x goes to the watchface and leaves it armed, UP
+// and SELECT inert -- so the difference is the caption, not a second window.
+// aplite has ~2.1 KB of app heap free; a duplicate Window plus four TextLayers
+// that can never be on-stack at the same time as the original is not worth it
+// there. The window itself lives in the smart-window section below.
+#define PENDING_WAITING 0
+#define PENDING_SNOOZED 1
+static void open_pending_window(int mode);
+// Forward declaration only (defined with the smart-window section's other
+// statics, below): start_ring, ~700 lines above, needs to check it too, to
+// hand the pending screen back once the ring it was covering for resumes.
+static Window *s_wait_window;
+
 // --- The ring: escalation, stop gestures, snooze. ---
 
 // Sound can only ever contribute when the platform has a speaker AND the system
@@ -1259,7 +1277,15 @@ static void ring_snooze_now(void) {
     return;
   }
 
-  close_to_watchface();
+  // THE SNOOZE OWNS THE SCREEN from here (2026-08-05). It used to exit to the
+  // watchface, which left nothing anywhere saying an alarm was pending and no
+  // way to cancel it short of waiting for it to ring again.
+  //
+  // Push BEFORE removing the ring window: the other order empties the window
+  // stack for an instant, and an empty stack exits the app -- to the watchface,
+  // mid-snooze, which is precisely the behaviour being removed.
+  open_pending_window(PENDING_SNOOZED);
+  window_stack_remove(s_ring_window, false);
 }
 
 static void hint_hide_cb(void *data) {
@@ -1542,6 +1568,14 @@ static void start_ring(int slot, bool from_deadline) {
     window_set_click_config_provider(s_ring_window, ring_click_config);
   }
   window_stack_push(s_ring_window, false);
+  // The pending screen has done its job -- the smart window's wait, or the
+  // snooze this ring is resuming from. Take it off the stack now that the ring
+  // is on top, rather than leaving it buried underneath for the rest of the
+  // cycle. After the push, so the stack is never empty; before the tick
+  // subscribe, so its .disappear cannot unsubscribe the ring's own tick.
+  if (s_wait_window && window_stack_contains_window(s_wait_window)) {
+    window_stack_remove(s_wait_window, false);
+  }
   tick_timer_service_subscribe(MINUTE_UNIT, ring_minute_tick);
 
   s_ringing = true;
@@ -1551,6 +1585,7 @@ static void start_ring(int slot, bool from_deadline) {
 // --- The smart window: minute-history reads, the waiting screen, the 1-min poll. ---
 
 static Window    *s_wait_window;
+static int        s_pending_mode;   // PENDING_WAITING / PENDING_SNOOZED
 static TextLayer *s_wait_keys;        // the two-line "how to get out" legend
 static AppTimer  *s_wait_hint_timer;
 static TextLayer *s_wait_time;
@@ -1589,7 +1624,15 @@ static void wait_window_update(void) {
 
   time_t deadline = (time_t)s_rs.deadline_at;
   struct tm *dtm = localtime(&deadline);
-  if (s_rs.smart_unavailable) {
+  if (s_pending_mode == PENDING_SNOOZED) {
+    // ring_started_at holds the snooze EXPIRY while one is in flight. An
+    // absolute time, matching "Alarm 07:50" on the other mode -- the running
+    // clock right above it supplies the delta.
+    time_t until = (time_t)s_rs.ring_started_at;
+    struct tm *utm = localtime(&until);
+    snprintf(sub, sizeof(sub), "Snooze %d\nRings again %02d:%02d",
+             s_rs.snooze_count, utm->tm_hour, utm->tm_min);
+  } else if (s_rs.smart_unavailable) {
     snprintf(sub, sizeof(sub), "Alarm %02d:%02d\nSmart alarm unavailable",
              dtm->tm_hour, dtm->tm_min);
   } else {
@@ -1685,7 +1728,8 @@ static void wait_show_hint(const char *msg) {
 static void wait_cancel_now(void) {
   int slot = s_rs.pending_slot;
   time_t deadline = (time_t)s_rs.deadline_at;
-  APP_LOG(APP_LOG_LEVEL_INFO, "WAIT cancel slot=%d deadline=%lu",
+  APP_LOG(APP_LOG_LEVEL_INFO, "%s cancel slot=%d deadline=%lu",
+          s_pending_mode == PENDING_SNOOZED ? "SNOOZE" : "WAIT",
           slot, (unsigned long)deadline);
   if (slot >= 0 && slot < MAX_ALARMS) {
     s_rs.missed[slot] = false;
@@ -1748,6 +1792,38 @@ static void wait_click_config(void *ctx) {
 
 static void wait_minute_tick(struct tm *t, TimeUnits units) {
   wait_window_update();
+}
+
+// The tick is owned by whoever is on top, in both directions -- the same
+// arrangement the two menus use (menu_win_appear/disappear). It used to be
+// subscribed by open_smart_window, which the snooze mode does not go through.
+static void wait_win_appear(Window *w) {
+  tick_timer_service_subscribe(MINUTE_UNIT, wait_minute_tick);
+  wait_window_update();   // minutes may have passed under another window
+}
+
+static void wait_win_disappear(Window *w) {
+  tick_timer_service_unsubscribe();
+}
+
+// The ONE place that knows how the pending window is built. Re-captions in
+// place when it is already up, which is what makes a mode change (waiting ->
+// snoozed) free of any stack manipulation.
+static void open_pending_window(int mode) {
+  s_pending_mode = mode;
+  if (!s_wait_window) {
+    s_wait_window = window_create();
+    window_set_window_handlers(s_wait_window, (WindowHandlers){
+      .load = wait_window_load, .unload = wait_window_unload,
+      .appear = wait_win_appear, .disappear = wait_win_disappear,
+    });
+    window_set_click_config_provider(s_wait_window, wait_click_config);
+  }
+  if (!window_stack_contains_window(s_wait_window)) {
+    window_stack_push(s_wait_window, false);
+  } else {
+    wait_window_update();
+  }
 }
 
 static void poll_cb(void *data);
@@ -1898,8 +1974,7 @@ static void open_smart_window(int slot, time_t window_start, time_t deadline) {
   // the wakeup chain alive: it re-places this snooze at priority 2 plus every
   // alarm's own deadline, which is what the window branch would otherwise have
   // relied on this call to do.
-  if (s_rs.snooze_count > 0 && s_rs.ring_started_at != 0
-      && (time_t)s_rs.ring_started_at > time(NULL)) {
+  if (ac_snooze_pending(s_rs.snooze_count, s_rs.ring_started_at, time(NULL))) {
     APP_LOG(APP_LOG_LEVEL_INFO,
             "SMART window for slot=%d declined: snooze #%d pending until %lu",
             slot, s_rs.snooze_count, (unsigned long)s_rs.ring_started_at);
@@ -1915,17 +1990,7 @@ static void open_smart_window(int slot, time_t window_start, time_t deadline) {
   APP_LOG(APP_LOG_LEVEL_INFO, "SMART window open slot=%d until %lu",
           slot, (unsigned long)deadline);
 
-  if (!s_wait_window) {
-    s_wait_window = window_create();
-    window_set_window_handlers(s_wait_window, (WindowHandlers){
-      .load = wait_window_load, .unload = wait_window_unload,
-    });
-    window_set_click_config_provider(s_wait_window, wait_click_config);
-  }
-  if (!window_stack_contains_window(s_wait_window)) {
-    window_stack_push(s_wait_window, false);
-  }
-  tick_timer_service_subscribe(MINUTE_UNIT, wait_minute_tick);
+  open_pending_window(PENDING_WAITING);
 
   // Keep the rolling re-entry wakeup alive: if anything kills this app during the
   // window, the next re-entry relaunches it and monitoring resumes intact, because
@@ -2169,6 +2234,20 @@ int main(void) {
 
   if (launched_by_wakeup) {
     handle_wakeup_cookie(launch_cookie);
+  }
+
+  // A SNOOZE IN FLIGHT OWNS THE SCREEN, however the app got launched -- by the
+  // user reopening it, or by a wakeup that had nothing of its own to show. This
+  // is what makes "cancel the alarm at any time" true after a long-BACK kill,
+  // which is the only way to leave the snooze screen without deciding anything.
+  //
+  // AFTER handle_wakeup_cookie, and conditional on an empty screen: a snooze
+  // whose expiry just fired has already become a ring, and that ring must win.
+  if (!(s_ring_window && window_stack_contains_window(s_ring_window))
+      && !(s_wait_window && window_stack_contains_window(s_wait_window))
+      && ac_snooze_pending(s_rs.snooze_count, s_rs.ring_started_at, time(NULL))) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "launch during a pending snooze -- showing it");
+    open_pending_window(PENDING_SNOOZED);
   }
 
   app_message_register_inbox_received(inbox_received);
