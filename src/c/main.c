@@ -2278,8 +2278,29 @@ static void handle_wakeup_cookie(int32_t cookie) {
       // 2026-08-05. A mismatch means the cycle is a leftover, so it is ended
       // here, before anything reads it, and both the window start and the
       // deadline are then derived from `when` like a fresh window's.
+      //
+      // THE CYCLE'S OWN occurrence, not the next one after now. Under
+      // SEMANTICS_RING_FROM the window runs [T, T+w], so a re-entry INSIDE a
+      // live window resolves `when` to tomorrow's occurrence (today's T is
+      // already in the past) -- validating the stored deadline against that
+      // discarded the live window and lost the day's alarm entirely. The
+      // stored window start is what identifies the occurrence the cycle is
+      // about. Probed with enabled/skip_next forced, so this asks about the
+      // alarm's grid, not about its current on/off state (a cycle for an
+      // alarm the user disabled mid-window must keep its previous behaviour,
+      // not be discarded by this guard).
+      time_t cycle_deadline = 0;
+      if (s_rs.window_started_at != 0 && slot >= 0 && slot < s_count) {
+        Alarm probe = s_alarms[slot];
+        probe.enabled = true;
+        probe.skip_next = false;
+        time_t cycle_when = ac_next_occurrence(&probe, (time_t)s_rs.window_started_at - 1);
+        if (cycle_when != 0) {
+          cycle_deadline = sc_ring_deadline(&s_cfg, cycle_when);
+        }
+      }
       time_t derived = sc_ring_deadline(&s_cfg, when);
-      if (ac_cycle_is_stale(s_rs.window_started_at, s_rs.deadline_at, derived)) {
+      if (ac_cycle_is_stale(s_rs.window_started_at, s_rs.deadline_at, cycle_deadline)) {
         APP_LOG(APP_LOG_LEVEL_WARNING,
                 "stale cycle discarded: stored window=%lu deadline=%lu is not "
                 "occurrence %lu's (deadline %lu)",

@@ -674,6 +674,71 @@ int main(void) {
     assert(ac_cycle_is_stale((uint32_t)at(2026, 8, 5, 7, 50), 0, dl_today));
   }
 
+  // --- ac_cycle_is_stale under SEMANTICS_RING_FROM: the comparison MUST be
+  // made against the cycle's OWN occurrence, not "the next occurrence after
+  // now" -- fix round 1's regression.
+  //
+  // RING_FROM's window sits [T, T+w], so a re-entry INSIDE a live window has
+  // `now` already past T; "the next occurrence after now" then resolves to
+  // TOMORROW, and comparing the stored deadline against that discarded a
+  // perfectly live window and lost the day's alarm entirely. The stored
+  // window start identifies the occurrence the cycle is about, so the
+  // production code now probes the alarm's occurrence grid from
+  // `window_started_at - 1`, not from `now`.
+  {
+    Alarm daily = { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x7F,
+                    .enabled = true };
+    const uint16_t window_min = 30;
+    const uint32_t full_dev_s = 0;
+    const time_t win_start_today = at(2026, 8, 5, 7, 50);
+    const time_t dl_today = at(2026, 8, 5, 8, 20);
+    const time_t dl_tomorrow = at(2026, 8, 6, 8, 20);
+
+    // 1. Validating against the CYCLE'S occurrence (base = window start - 1):
+    // NOT stale for a live window.
+    {
+      time_t cycle_when = ac_next_occurrence(&daily, win_start_today - 1);
+      time_t cycle_deadline = ac_ring_deadline(SEMANTICS_RING_FROM, true,
+                                               window_min, full_dev_s, cycle_when);
+      assert(cycle_deadline == dl_today);
+      assert(!ac_cycle_is_stale((uint32_t)win_start_today, (uint32_t)dl_today,
+                                cycle_deadline));
+    }
+
+    // 2. The same validation still reports STALE for the real orphan this
+    // task exists for: a 13:52 window/14:22 deadline left behind under this
+    // same daily 07:50 alarm.
+    {
+      const time_t win_start_orphan = at(2026, 8, 5, 13, 52);
+      const time_t dl_orphan = at(2026, 8, 5, 14, 22);
+      time_t cycle_when = ac_next_occurrence(&daily, win_start_orphan - 1);
+      assert(cycle_when == at(2026, 8, 6, 7, 50));   // tomorrow: today's already rang
+      time_t cycle_deadline = ac_ring_deadline(SEMANTICS_RING_FROM, true,
+                                               window_min, full_dev_s, cycle_when);
+      assert(cycle_deadline == dl_tomorrow);
+      assert(ac_cycle_is_stale((uint32_t)win_start_orphan, (uint32_t)dl_orphan,
+                               cycle_deadline));
+    }
+
+    // 3. THE REGRESSION THIS ROUND FIXED: validating against "the next
+    // occurrence after now" (base = now - 60, now = 07:53, mid-window)
+    // instead of against the cycle's own occurrence reports STALE for the
+    // SAME LIVE window as case 1 -- because by 07:53 today's 07:50 has
+    // already passed, so "the next occurrence after now" is tomorrow's. This
+    // is exactly the wrong comparison the round-1 fix replaced in main.c; do
+    // NOT "simplify" the production code's search base back to `now` --
+    // this assertion is what would catch that regression.
+    {
+      const time_t now_mid_window = at(2026, 8, 5, 7, 53);
+      time_t wrong_when = ac_next_occurrence(&daily, now_mid_window - 60);
+      assert(wrong_when == at(2026, 8, 6, 7, 50));   // tomorrow -- the bug
+      time_t wrong_deadline = ac_ring_deadline(SEMANTICS_RING_FROM, true,
+                                               window_min, full_dev_s, wrong_when);
+      assert(ac_cycle_is_stale((uint32_t)win_start_today, (uint32_t)dl_today,
+                               wrong_deadline));
+    }
+  }
+
   printf("test_alarm_calc: all assertions passed\n");
   return 0;
 }
