@@ -167,9 +167,24 @@ screen, so the morning tells you what happened.
 
 ### Stopping and snoozing
 
-On the ringing screen: **UP snoozes**, and **two presses of the bottom button stop
-it**. One press never stops an alarm — a half-asleep hand finds one button by feel,
-and that is exactly how an alarm gets dismissed by accident.
+On the ringing screen, **both buttons need two presses**: the top button
+(*Snooze*) twice snoozes, the bottom button (*Stop*) twice stops it. One press
+never does either — it only shows what the second press would do (`Press 2x to
+snooze` / `Press 2x to stop`) — because a half-asleep hand finds one button by
+feel, and that is exactly how an alarm used to get dismissed, or snoozed, by
+accident.
+
+A snooze no longer drops you back to the watchface. Instead the watch keeps a
+screen up: the clock, `Snooze 1` (which snooze this is), and `Rings again 09:40`
+(when it will sound again), with a permanent two-line reminder underneath —
+`2x Back: watchface` and `2x Down: cancel alarm`. **Two presses of DOWN cancel
+the alarm outright** — it will not ring again tonight. Two presses of BACK just
+leave this screen for the watchface; the snooze is still armed, and the alarm
+comes back on its own when it ends. Close the app entirely while snoozed (BACK
+twice, or the button-hold that closes any app on this watch) and opening it
+again brings this same screen straight back, not the menu. While a snooze is
+pending, both the main menu and the alarm list say so in words too — `snoozed,
+in 4 min` — so you never have to wonder.
 
 Snooze is 10 minutes by default, 5 snoozes maximum; when they run out, the snooze
 button behaves as Stop rather than going inert. **Each snooze restarts the

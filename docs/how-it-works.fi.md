@@ -168,9 +168,24 @@ Kun soitto luovuttaa, se lakkaa pitämästä ääntä mutta jättää näytölle
 
 ### Pysäyttäminen ja torkku
 
-Soittoruudulla: **UP torkuttaa**, ja **kaksi painallusta alanappia pysäyttää**. Yksi
-painallus ei koskaan pysäytä herätystä — puoliunessa oleva käsi löytää yhden napin
-tunnustelemalla, ja juuri niin herätys tulee vahingossa kuitatuksi.
+Soittoruudulla **molemmat napit vaativat kaksi painallusta**: ylänappi (*Snooze*)
+torkuttaa kahdesti painettuna, alanappi (*Stop*) pysäyttää kahdesti painettuna. Yksi
+painallus ei koskaan tee kumpaakaan — se vain näyttää, mitä toinen painallus tekisi
+(`Press 2x to snooze` / `Press 2x to stop`) — koska puoliunessa oleva käsi löytää
+yhden napin tunnustelemalla, ja juuri niin herätys ennen saattoi tulla vahingossa
+kuitatuksi tai torkutetuksi.
+
+Torkku ei enää palauta suoraan kellotaululle. Sen sijaan kello pitää näytön auki:
+kellonajan, `Snooze 1` (monesko torkku tämä on) ja `Rings again 09:40` (milloin se
+soi seuraavan kerran), ja niiden alla pysyvän kaksirivisen muistutuksen — `2x Back:
+watchface` ja `2x Down: cancel alarm`. **Kaksi painallusta DOWN-nappia peruu
+herätyksen kokonaan** — se ei soi enää tänä yönä. Kaksi painallusta BACK-nappia vie
+vain pois tältä näytöltä kellotaululle; torkku on yhä voimassa, ja herätys palaa
+itsestään kun se päättyy. Jos sovellus suljetaan kokonaan torkun aikana (BACK
+kahdesti, tai pitkä painallus, joka sulkee minkä tahansa sovelluksen tällä
+kellolla), sen avaaminen uudelleen tuo saman näytön suoraan takaisin eikä valikkoa.
+Torkun ollessa käynnissä sekä päävalikko että herätyslista kertovat sen sanoin —
+`snoozed, in 4 min` — joten sitä ei tarvitse arvailla.
 
 Torkku on oletuksena 10 minuuttia ja niitä sallitaan 5; kun ne loppuvat, torkkunappi
 toimii pysäytyksenä sen sijaan että muuttuisi tehottomaksi. **Jokainen torkku

@@ -26,9 +26,11 @@ Other features:
 
 - Up to **8 alarm slots**, each with weekday repeat or one-time firing,
   enable/disable, skip-next and snooze.
-- **Two presses of the bottom button stop the alarm** — a single press only
-  snoozes, so a sleepy hand can't dismiss it by accident; `BACK` deliberately
-  does nothing while it's ringing.
+- **Two presses of either ring-screen button** — top to snooze, bottom to
+  stop — a single press only shows what the second would do, so a sleepy hand
+  can't dismiss or snooze it by accident; `BACK` deliberately does nothing
+  while it's ringing. A snooze keeps its own screen on the watch rather than
+  dropping back to the watchface.
 - A **"Last night" summary** on the watch: sleep onset, the movement
   baseline, what triggered the alarm, and when it would have fired at each
   other sensitivity — the built-in calibration tool for deciding whether to
