@@ -303,6 +303,35 @@ static void prv_dump_eval(void) {
   APP_LOG(APP_LOG_LEVEL_INFO, "DBG hist first=%s n=%d widx=%d",
           prv_fmt_t(s_hist_first, a, sizeof a), s_hist_n, s_win_idx);
 
+  // The sleep sessions FIRST, and the awake minutes excluded before anything is
+  // evaluated: every eval line below then describes the same population the real
+  // run used, differing only in where it starts. Marking between two evals
+  // instead would print two different levels for the same percentile and the
+  // same anchor, on the one artefact whose whole job is to be read afterwards.
+  //
+  // Anchored on the alarm being replayed, NOT on time(NULL): the dump is usually
+  // run hours later (this one at 19:17 for a 07:50 alarm), and a 20 h scan from
+  // "now" can miss last night's sessions entirely while offering an afternoon nap
+  // as the newest one -- which would then chain a merge across the whole day.
+  time_t onset = prv_session_onset(to);
+  APP_LOG(APP_LOG_LEVEL_INFO, "DBG onset merged=%s newest=%s sessions=%d gaps=%d",
+          prv_fmt_t(onset, a, sizeof a),
+          prv_fmt_t(s_nspans > 0 ? (time_t)s_spans[0].start : 0, b, sizeof b),
+          s_nspans, s_ngaps);
+  for (int i = 0; i < s_nspans; i++) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "DBG sess%d %s -> %s", i,
+            prv_fmt_t((time_t)s_spans[i].start, a, sizeof a),
+            prv_fmt_t((time_t)s_spans[i].end, b, sizeof b));
+  }
+  for (int i = 0; i < s_ngaps; i++) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "DBG awake%d %s -> %s (excluded)", i,
+            prv_fmt_t((time_t)s_gaps[i].start, a, sizeof a),
+            prv_fmt_t((time_t)s_gaps[i].end, b, sizeof b));
+  }
+  // The h### lines that follow print an excluded minute's vmc with a leading '!'
+  // rather than hiding it, so applying this loses nothing.
+  se_mark_awake(s_hist, s_hist_n, (uint32_t)s_hist_first, s_gaps, s_ngaps);
+
   uint8_t pct = 90, mins = 2;
   as_effective_sens(s_cfg, &pct, &mins);
   SleepEvalCfg sc;
@@ -320,29 +349,10 @@ static void prv_dump_eval(void) {
                         : 0, b, sizeof b),
           (unsigned long)r.acc, (int)r.insufficient_data);
 
-  // The same evaluation ANCHORED AT THE MERGED SLEEP ONSET, with the awake gaps
-  // dropped -- which is what hr_read_night feeds se_evaluate in the real run.
-  // Different population start -> different baseline and trigger level, so this
-  // is the line to compare against the night summary, not the one above.
-  time_t onset = prv_session_onset(time(NULL));
-  APP_LOG(APP_LOG_LEVEL_INFO, "DBG onset merged=%s newest=%s sessions=%d gaps=%d",
-          prv_fmt_t(onset, a, sizeof a),
-          prv_fmt_t(s_nspans > 0 ? (time_t)s_spans[0].start : 0, b, sizeof b),
-          s_nspans, s_ngaps);
-  for (int i = 0; i < s_nspans; i++) {
-    APP_LOG(APP_LOG_LEVEL_INFO, "DBG sess%d %s -> %s", i,
-            prv_fmt_t((time_t)s_spans[i].start, a, sizeof a),
-            prv_fmt_t((time_t)s_spans[i].end, b, sizeof b));
-  }
-  // Applied to s_hist, so the replay below and the h### lines that follow both
-  // show what the algorithm actually saw. The history dump prints an excluded
-  // minute's vmc with a leading '!' rather than hiding it, so nothing is lost.
-  for (int i = 0; i < s_ngaps; i++) {
-    APP_LOG(APP_LOG_LEVEL_INFO, "DBG awake%d %s -> %s (excluded)", i,
-            prv_fmt_t((time_t)s_gaps[i].start, a, sizeof a),
-            prv_fmt_t((time_t)s_gaps[i].end, b, sizeof b));
-  }
-  se_mark_awake(s_hist, s_hist_n, (uint32_t)s_hist_first, s_gaps, s_ngaps);
+  // The same evaluation ANCHORED AT THE MERGED SLEEP ONSET -- which is where
+  // hr_read_night starts the population in the real run. Different population
+  // start -> different baseline and trigger level, so this is the line to compare
+  // against the night summary, not the one above.
   if (onset > s_hist_first
       && (int)((onset - s_hist_first) / SECONDS_PER_MINUTE) < s_win_idx) {
     int off = (int)((onset - s_hist_first) / SECONDS_PER_MINUTE);

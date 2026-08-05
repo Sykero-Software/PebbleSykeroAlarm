@@ -43,8 +43,34 @@ uint32_t se_merge_sessions(const SleepSpan *spans, int n, uint32_t max_gap_s,
   if (spans == NULL || n <= 0) {
     return 0;
   }
-  uint32_t onset = spans[0].start;
+  // The contract is NEWEST-FIRST. A violated contract must not be guessed at:
+  // walking an oldest-first list would take spans[0] (the oldest) as the onset
+  // and then absorb every later span as an "overlap", returning the whole night
+  // with NO gaps recorded -- every awake minute in the population, which is the
+  // exact contamination this function exists to prevent. Fall back to the newest
+  // session alone, which is the safe (pre-merge) behaviour.
   for (int i = 1; i < n; i++) {
+    if (spans[i].start > spans[i - 1].start) {
+      uint32_t newest = spans[0].start;
+      for (int k = 1; k < n; k++) {
+        if (spans[k].start > newest) {
+          newest = spans[k].start;
+        }
+      }
+      return newest;
+    }
+  }
+  // A malformed newest span cannot anchor the walk either: skip to the first
+  // well-formed one (older spans are checked in the loop below).
+  int first = 0;
+  while (first < n && spans[first].end <= spans[first].start) {
+    first++;
+  }
+  if (first >= n) {
+    return 0;
+  }
+  uint32_t onset = spans[first].start;
+  for (int i = first + 1; i < n; i++) {
     if (spans[i].end <= spans[i].start) {
       continue;   // malformed span: ignore rather than let it end the night
     }

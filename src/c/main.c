@@ -2149,7 +2149,7 @@ static void poll_cb(void *data) {
   }
 
   // CANNOT JUDGE THIS NIGHT AT ALL, under SEMANTICS_RING_FROM: ring at the set
-  // time rather than sitting out the window.
+  // time rather than sitting out the window -- but never BEFORE that set time.
   //
   // In that mode the set time is the EARLIEST allowed ring and the hard deadline
   // is at the far end of the window, so standing down costs the user the whole
@@ -2160,15 +2160,49 @@ static void poll_cb(void *data) {
   // alarm would have rung at 08:20. Ringing at the window's start is never late
   // and never earlier than what the user asked for, which is the whole promise
   // of this mode; the smart alarm simply degrades to a plain alarm for that
-  // night. The other modes put the deadline AT the set time, so standing down
-  // there already rings exactly on time and needs no special case.
+  // night. The other two modes need no special case: their deadline is already
+  // the moment the ring must START -- the set time for RING_LATEST, and the set
+  // time minus the ramp for AWAKE_BY -- so standing down there is not late.
+  //
+  // "Ring now" is only "ring at the set time" while the live cycle's geometry
+  // matches the mode in force, and it need not: a cycle looks IDENTICAL in all
+  // three modes (`deadline_at == window_started_at + smart_window_min * 60`
+  // everywhere) -- only `time_semantics` says where the set time sits inside it.
+  // A cycle opened as RING_LATEST puts the set time at the window's END, so
+  // reading the config alone would ring 29 minutes EARLY. That is reachable
+  // without touching the phone during the window: switch the mode while the app
+  // is not running, and the launch config handshake (`request_config`, whose
+  // reply lands after `ac_window_wakeup` has already opened the window from the
+  // persisted config) updates `s_cfg` mid-cycle -- `reload_and_rearm` re-arms
+  // wakeups but deliberately does not rebuild the cycle.
+  //
+  // So the guard is the promise itself, checked against the occurrence THE CYCLE
+  // IS ABOUT rather than against the config: never ring before the set time.
+  // Probed from `window_started_at - 1`, not from `now`: under RING_FROM `now` is
+  // already past the set time inside a live window, so "the next occurrence after
+  // now" resolves to TOMORROW (the trap that cost backlog item 21 a review
+  // round). When the probe cannot resolve an occurrence, the ordinary deadline
+  // path stays in charge.
   if ((!s_last_read.available || s_last_read.window_start < 0 || r.insufficient_data)
       && s_cfg.time_semantics == SEMANTICS_RING_FROM) {
+    int8_t slot = cycle_owner_slot();
+    time_t set_time = 0;
+    if (slot >= 0 && s_rs.window_started_at != 0) {
+      Alarm probe = s_alarms[slot];
+      probe.enabled = true;
+      probe.skip_next = false;
+      set_time = ac_next_occurrence(&probe, (time_t)s_rs.window_started_at - 1);
+    }
+    if (set_time != 0 && now + AC_SERVED_TOLERANCE_S >= set_time) {
+      APP_LOG(APP_LOG_LEVEL_INFO,
+              "SMART cannot judge (avail=%d insuf=%d) -- ringing at the set time",
+              (int)s_last_read.available, (int)r.insufficient_data);
+      start_ring(s_rs.pending_slot, false);
+      return;
+    }
     APP_LOG(APP_LOG_LEVEL_INFO,
-            "SMART cannot judge (avail=%d insuf=%d) -- ringing at the set time",
-            (int)s_last_read.available, (int)r.insufficient_data);
-    start_ring(s_rs.pending_slot, false);
-    return;
+            "SMART cannot judge, but the set time (%lu) is still ahead -- waiting",
+            (unsigned long)set_time);
   }
   wait_window_update();
   s_poll_timer = app_timer_register(60 * 1000, poll_cb, NULL);

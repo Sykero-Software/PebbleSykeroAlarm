@@ -3,8 +3,9 @@
 // se_merge_sessions / se_mark_awake, plus a replay of a REAL recorded night
 // (tests/fixtures/night_2026_08_05.h) through the production se_evaluate.
 //
-//   gcc -std=c11 -Wall -I src/c -I tests -o /tmp/t
+//   gcc -std=c11 -Wall -I src/c -o /tmp/t
 //       tests/test_sleep_sessions.c src/c/sleep_eval.c && /tmp/t
+// (no -I tests: the fixture include is relative to this file's own directory)
 //
 // The night is the one that motivated this code: the firmware ended the sleep
 // session at a night waking and started a new one afterwards, which cut the
@@ -160,8 +161,8 @@ int main(void) {
     assert(ob == 10000u && n == 1);
   }
   {
-    // Overlapping spans (the firmware reporting a session inside another, or a
-    // caller passing them oldest-first) are absorbed without inventing a gap.
+    // Overlapping spans (the firmware reporting a session inside another) are
+    // absorbed without inventing a gap.
     const SleepSpan overlap[2] = {
       { 20000u + HOUR_S, 20000u + 4u * HOUR_S },
       { 20000u,          20000u + 2u * HOUR_S },
@@ -170,6 +171,45 @@ int main(void) {
     int n = -1;
     assert(se_merge_sessions(overlap, 2, 60u, gaps, SE_MAX_SESSIONS, &n) == 20000u);
     assert(n == 0);
+  }
+  {
+    // A list that is NOT newest-first is a violated contract, and the failure it
+    // would otherwise produce is the dangerous one: taking spans[0] (the oldest)
+    // as the onset and absorbing the rest as "overlaps" returns the whole night
+    // with NO gaps, i.e. every awake minute inside the population. It must fall
+    // back to the newest session alone instead.
+    const SleepSpan oldest_first[3] = {
+      { 30000u,               30000u + 2u * HOUR_S },
+      { 30000u + 3u * HOUR_S, 30000u + 5u * HOUR_S },
+      { 30000u + 6u * HOUR_S, 30000u + 7u * HOUR_S },   // newest, listed last
+    };
+    SleepSpan gaps[SE_MAX_SESSIONS];
+    int n = -1;
+    uint32_t onset = se_merge_sessions(oldest_first, 3, SE_SESSION_MERGE_GAP_S,
+                                       gaps, SE_MAX_SESSIONS, &n);
+    assert(onset == 30000u + 6u * HOUR_S);
+    assert(n == 0);
+  }
+  {
+    // A malformed NEWEST span must not anchor the walk (it would fix the onset at
+    // a bogus start and then measure every gap from it); the first well-formed
+    // span does.
+    const SleepSpan bad_head[3] = {
+      { 40000u + 5u * HOUR_S, 40000u + 5u * HOUR_S },   // zero length, newest
+      { 40000u + 4u * HOUR_S, 40000u + 5u * HOUR_S },
+      { 40000u,               40000u + 4u * HOUR_S - 10u * MIN_S },
+    };
+    SleepSpan gaps[SE_MAX_SESSIONS];
+    int n = -1;
+    uint32_t onset = se_merge_sessions(bad_head, 3, SE_SESSION_MERGE_GAP_S, gaps,
+                                       SE_MAX_SESSIONS, &n);
+    assert(onset == 40000u);
+    assert(n == 1);
+    // Every span malformed -> nothing to anchor on at all.
+    const SleepSpan all_bad[2] = { { 5u, 5u }, { 3u, 2u } };
+    int nb = -1;
+    assert(se_merge_sessions(all_bad, 2, 60u, gaps, SE_MAX_SESSIONS, &nb) == 0);
+    assert(nb == 0);
   }
   printf("  se_merge_sessions: ok\n");
 

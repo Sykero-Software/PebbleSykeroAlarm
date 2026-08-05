@@ -108,6 +108,14 @@ uint32_t se_merge_sessions(const SleepSpan *spans, int n, uint32_t max_gap_s,
 // A minute is marked when it OVERLAPS the gap at all, not only when it starts
 // inside it: at worst that excludes one extra minute at each edge, which is the
 // harmless direction.
+//
+// That "harmless" holds only OUTSIDE the alarm window, and it is worth knowing
+// why it holds at all: an invalid minute RESETS se_evaluate's accumulator, so a
+// gap reaching into the window would suppress firing exactly when the sleeper is
+// awake. It cannot today -- a gap ENDS at a reported session start, and the
+// firmware needs ~60 minutes of sleep before it reports a session, so with
+// smart_window_min capped at 60 no such start exists inside a window. Re-check
+// this if the window is ever allowed to be longer.
 void se_mark_awake(SleepMinute *samples, int count, uint32_t first_utc,
                    const SleepSpan *gaps, int n_gaps);
 
