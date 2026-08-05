@@ -2298,14 +2298,33 @@ static void handle_wakeup_cookie(int32_t cookie) {
         break;
       }
       time_t when = 0;
-      int slot = s_rs.pending_slot;
-      if (slot >= 0 && slot >= s_count) {
-        // A stale pending_slot: the phone deleted/reconfigured alarms while
-        // this window was open (the same class of bound check the
-        // WC_DEADLINE/WC_SNOOZE case above already applies to its own
-        // pending_slot read). Fall back to whatever is next now rather than
-        // reading a slot that no longer represents the tracked alarm.
-        slot = -1;
+      // WHICH ALARM IS THIS WINDOW WAKEUP FOR? pending_slot answers that ONLY
+      // while its window is actually live -- i.e. only in the state this wakeup
+      // exists to service. Reading it unconditionally let a cycle with NO live
+      // window hijack another alarm's window opening: a force-quit mid-ring
+      // leaves ring_started_at != 0, window_started_at == 0 and pending_slot on
+      // the OLD alarm, and the launch sc_rearm then drops that cycle's keep-alive,
+      // so it stays live indefinitely. The next day, alarm 1's own WC_WINDOW
+      // arrived and this handler worked on alarm 0: `win` landed in the future, it
+      // re-armed only -- and sc_rearm will not re-place a WC_WINDOW whose start
+      // has passed, so alarm 1's smart window never opened at all and it could
+      // only ring at its hard deadline.
+      //
+      // AC_CYCLE_WINDOW is exactly the condition: a live window, no ring and no
+      // pending snooze in progress, and (via cycle_owner_slot) a pending_slot that
+      // still names a real alarm -- which subsumes the bound check this used to do
+      // by hand for the phone deleting slots mid-window. Anything else falls
+      // through to ac_next_alarm below, which resolves whatever is next NOW.
+      //
+      // A pending snooze stays protected: it reaches this branch as
+      // AC_CYCLE_SNOOZE, so the handler resolves the next alarm instead and the
+      // window it then tries to open is declined by open_smart_window's own
+      // snooze check (which is the one owner of that rule).
+      int slot = -1;
+      if (ac_cycle_state(cycle_owner_slot(), s_rs.window_started_at,
+                         s_rs.ring_started_at, s_rs.snooze_count,
+                         now) == AC_CYCLE_WINDOW) {
+        slot = s_rs.pending_slot;
       }
       if (slot < 0) {
         slot = ac_next_alarm(s_alarms, s_count, now - 60, &when);
