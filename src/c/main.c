@@ -2063,53 +2063,62 @@ static void handle_wakeup_cookie(int32_t cookie) {
         // re-arming here a kill anywhere past that window loses the alarm
         // outright, defeating the point of keeping a wakeup live for the
         // whole ring.
+        //
+        // The accepted gap (user decision 2, 2026-08-05): if a SECOND alarm's
+        // deadline arrives while a first alarm is still ringing, this branch
+        // consumes it and that second alarm never rings at all -- it is not
+        // queued anywhere. Accepted because the user is already being woken,
+        // and serving both would need a queue (more than one served_slot/
+        // served_at pair), i.e. a persist-format change.
         sc_schedule(now + SC_REENTRY_GAP_S, WC_SNOOZE);
         break;
       }
-      int slot = s_rs.pending_slot;
-      if (slot < 0) {
-        time_t when = 0;
-        slot = ac_next_alarm(s_alarms, s_count, now - 120, &when);
-      }
-      if (slot < 0 && s_count > 0) {
-        slot = 0;   // last-resort fallback: something to ring beats nothing
-      }
-      // Bounded against s_count (not just >= 0): with s_count == 0 the
-      // fallback above leaves slot at -1, and starting a ring on slot 0 with
-      // no alarms configured would have ring_stop_now later mutate
-      // s_alarms[0] out of range. This can also happen with s_count > 0: if
-      // alarms were deleted (from the phone) while this wakeup was pending,
-      // s_rs.pending_slot can point past the shrunk array.
-      if (slot >= 0 && slot < s_count) {
-        start_ring(slot, cookie == WC_DEADLINE);
+      // WHICH ALARM IS THIS WAKEUP FOR? Not "which cycle is in progress" --
+      // pending_slot answers that, and reading it as the answer to this question
+      // was backlog item 20: sc_rearm arms the next unserved alarm's own deadline
+      // at priority 1 regardless of which alarm is mid-cycle, so a 07:05 alarm's
+      // deadline landing inside a snoozed 07:00 alarm's cycle re-rang the 07:00
+      // one, restarted its ramp, destroyed the snooze, and lost the 07:05 alarm
+      // silently until the next day. ac_dispatch_wakeup re-derives the owner from
+      // the clock, the alarms and RunState, and is host-tested for every case.
+      AcWakeDecision wd = ac_dispatch_wakeup(
+          s_alarms, s_count, now,
+          (int)s_rs.pending_slot, s_rs.ring_started_at, s_rs.snooze_count,
+          (int)s_rs.served_slot, (time_t)s_rs.served_at,
+          (int32_t)(now - sc_ring_deadline(&s_cfg, now)));
+      APP_LOG(APP_LOG_LEVEL_INFO, "WAKEUP dispatch cookie=%d -> action=%d slot=%d "
+              "(pending=%d ring=%lu snooze=%d)",
+              (int)cookie, (int)wd.action, wd.slot, (int)s_rs.pending_slot,
+              (unsigned long)s_rs.ring_started_at, s_rs.snooze_count);
+
+      if (wd.action == AC_WAKE_RING_DEADLINE) {
+        start_ring(wd.slot, true);
+      } else if (wd.action == AC_WAKE_RESUME) {
+        start_ring(wd.slot, false);
+      } else if (wd.action == AC_WAKE_KEEP) {
+        // A live cycle with nothing due -- a pending snooze is the reachable
+        // case. Do NOT end the cycle here: that is precisely what erased the
+        // snooze. Re-arm so the chain stays alive and leave everything else.
+        sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
       } else {
-        // Nothing to ring, but the wakeup was still consumed -- without this,
-        // a stale/out-of-range pending_slot would silently drop the wakeup
-        // chain here (no ring, no re-arm), and no alarm would ever fire again.
+        // Nothing to ring and no live cycle, but the wakeup was still consumed --
+        // without this, the wakeup chain would silently end here and no alarm
+        // would ever fire again.
         //
-        // Also clear the stale pending_slot itself (found in Task 7's review):
-        // with pending_slot left at an out-of-range value (e.g. an alarm the
-        // phone just deleted), every LATER WC_DEADLINE takes the `slot < 0`
-        // branch above straight to `s_rs.pending_slot`, fails this same
-        // `slot < s_count` bound again, and lands right back here -- so no
-        // alarm ever rings again. Resetting it (and the ring bookkeeping that
-        // goes with a fresh cycle) here is what breaks that loop.
-        //
-        // This ends the cycle, so it clears all five cycle fields through the
-        // one owner (runstate_end_cycle) rather than picking a subset by hand:
-        // window_started_at was the subset miss found in Task 11's review, and
-        // deadline_at was the subset miss the whole-branch review found
-        // (Critical 1) -- a stale deadline_at left here made the NEXT night's
-        // WC_WINDOW ring at window start, up to 60 minutes early.
+        // Ends the cycle through its one owner (runstate_end_cycle) rather than
+        // picking a subset of the five fields by hand: window_started_at was the
+        // subset miss found in Task 11's review, and deadline_at was the subset
+        // miss the whole-branch review found (Critical 1) -- a stale deadline_at
+        // left here made the NEXT night's WC_WINDOW ring at window start, up to
+        // 60 minutes early.
         runstate_end_cycle();
         as_save_runstate(&s_rs);
         // If the waiting screen happens to be up for this now-invalid window,
-        // don't leave it stranded on screen: with window_started_at cleared,
-        // poll_cb's own next tick would just return early forever (its guard
-        // checks that field first) and the BACK button is deliberately a
-        // no-op there, so nothing would ever bring the user back to the
-        // watchface. s_ringing is guaranteed false here (checked at the top of
-        // this case), so this is safe.
+        // don't leave it stranded: with window_started_at cleared, poll_cb's next
+        // tick returns early forever (its guard checks that field first) and BACK
+        // is deliberately a no-op there, so nothing would bring the user back to
+        // the watchface. s_ringing is guaranteed false here (checked at the top
+        // of this case), so this is safe.
         if (s_poll_timer) {
           app_timer_cancel(s_poll_timer);
           s_poll_timer = NULL;
