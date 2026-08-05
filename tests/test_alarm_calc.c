@@ -609,6 +609,46 @@ int main(void) {
     assert(d.action == AC_WAKE_KEEP);
   }
 
+  // --- ac_cycle_state: the single answer to "what is ongoing" ---
+  {
+    const time_t now = at(2026, 8, 5, 14, 0);
+    const uint32_t future = (uint32_t)at(2026, 8, 5, 14, 30);
+    const uint32_t past = (uint32_t)at(2026, 8, 5, 13, 0);
+
+    // Nothing live.
+    assert(ac_cycle_state(-1, 0, 0, 0, now) == AC_CYCLE_NONE);
+    // A slot with no cycle fields is still nothing live.
+    assert(ac_cycle_state(0, 0, 0, 0, now) == AC_CYCLE_NONE);
+
+    // A snooze in flight (count > 0 and the expiry is still ahead) wins.
+    assert(ac_cycle_state(0, 0, future, 1, now) == AC_CYCLE_SNOOZE);
+    // ... even when a window is recorded too.
+    assert(ac_cycle_state(0, past, future, 1, now) == AC_CYCLE_SNOOZE);
+
+    // A ring cycle with no snooze: ring_started_at set, count 0. This is the
+    // force-quit-mid-ring state the menu has to be able to show.
+    assert(ac_cycle_state(0, 0, past, 0, now) == AC_CYCLE_RINGING);
+    // An EXPIRED snooze is no longer pending, so it reads as a live ring, not
+    // as a snooze -- the ring is what the keep-alive wakeup will resume.
+    assert(ac_cycle_state(0, 0, past, 2, now) == AC_CYCLE_RINGING);
+    // A ring beats a window (start_ring zeroes window_started_at, so a cycle
+    // carrying both is already inconsistent; the ring is the live thing).
+    assert(ac_cycle_state(0, past, past, 0, now) == AC_CYCLE_RINGING);
+
+    // A smart window open, nothing ringing.
+    assert(ac_cycle_state(0, past, 0, 0, now) == AC_CYCLE_WINDOW);
+
+    // pending_slot < 0 with ANY live cycle is an orphan -- the owning alarm is
+    // gone (ac_prune_spent_one_time mapped it away), whatever the cycle was.
+    assert(ac_cycle_state(-1, past, 0, 0, now) == AC_CYCLE_ORPHAN);
+    assert(ac_cycle_state(-1, 0, past, 0, now) == AC_CYCLE_ORPHAN);
+    assert(ac_cycle_state(-1, 0, future, 1, now) == AC_CYCLE_ORPHAN);
+
+    // Boundary: a snooze expiring exactly at `now` has expired (ac_snooze_pending
+    // requires the expiry to be strictly ahead), so this is a live ring.
+    assert(ac_cycle_state(0, 0, (uint32_t)now, 1, now) == AC_CYCLE_RINGING);
+  }
+
   printf("test_alarm_calc: all assertions passed\n");
   return 0;
 }

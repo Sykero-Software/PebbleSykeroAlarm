@@ -385,3 +385,26 @@ AcWakeDecision ac_dispatch_wakeup(const Alarm *alarms, int count, time_t now,
 
   return d;   // AC_WAKE_NONE
 }
+
+AcCycleState ac_cycle_state(int8_t pending_slot, uint32_t window_started_at,
+                            uint32_t ring_started_at, uint8_t snooze_count,
+                            time_t now) {
+  AcCycleState st = AC_CYCLE_NONE;
+  if (ac_snooze_pending(snooze_count, ring_started_at, now)) {
+    st = AC_CYCLE_SNOOZE;
+  } else if (ring_started_at != 0) {
+    // An expired snooze lands here too, and should: the keep-alive wakeup will
+    // resume the RING, so a ring is what the user has to be able to cancel.
+    st = AC_CYCLE_RINGING;
+  } else if (window_started_at != 0) {
+    st = AC_CYCLE_WINDOW;
+  }
+  if (st != AC_CYCLE_NONE && pending_slot < 0) {
+    // No owning alarm: only ac_prune_spent_one_time can produce this (every
+    // path that begins a cycle records a real slot), and it must be reported
+    // as its own state so a caller can offer to clear it rather than trying to
+    // describe an alarm that no longer exists.
+    return AC_CYCLE_ORPHAN;
+  }
+  return st;
+}

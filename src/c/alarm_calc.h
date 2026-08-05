@@ -253,4 +253,30 @@ AcWakeDecision ac_dispatch_wakeup(const Alarm *alarms, int count, time_t now,
                                   uint8_t snooze_count,
                                   int served_slot, time_t served_at, int32_t lead_s);
 
+// WHAT IS ONGOING RIGHT NOW? The single classifier for RunState's one live
+// cycle, so the menu row, the pending screen's caption and the launch-time
+// repair cannot describe the same state differently (they did: an open window
+// was reported by no screen at all, and a cycle whose owning alarm had been
+// pruned by ac_prune_spent_one_time was reachable from nothing -- it still
+// re-armed the rolling re-entry wakeup and, on 2026-08-05, would have rung a
+// full escalating alarm for an occurrence the user never set).
+//
+// The order below makes the classification TOTAL -- exactly one result applies
+// to any combination of fields, including the inconsistent ones.
+typedef enum {
+  AC_CYCLE_NONE = 0,   // nothing live
+  AC_CYCLE_SNOOZE,     // a snooze is in flight
+  AC_CYCLE_RINGING,    // a ring cycle is live with no window and no pending snooze
+  AC_CYCLE_WINDOW,     // a smart window is open, waiting for light sleep
+  AC_CYCLE_ORPHAN,     // a live cycle whose owning slot is gone
+} AcCycleState;
+
+// Plain integers in (RunState's own fields), enum out: pure, so a host test
+// reaches it without alarm_store.h. `now` decides only whether a snooze expiry
+// is still ahead -- ac_snooze_pending is reused rather than re-derived, so this
+// and sc_rearm cannot disagree about what "a snooze is pending" means.
+AcCycleState ac_cycle_state(int8_t pending_slot, uint32_t window_started_at,
+                            uint32_t ring_started_at, uint8_t snooze_count,
+                            time_t now);
+
 #endif
