@@ -925,6 +925,8 @@ int main(void) {
       assert(d.end_cycle);                  // the leftover must not survive
       assert(d.abandon_screen);             // ...nor the screen describing it
       assert(d.deadline == 0);              // nothing derived from 14:22
+      assert(d.reason == AC_WIN_REASON_NO_OCCURRENCE);  // the orphan owns nothing
+                                                         // to restart from
     }
 
     // 4. AN ALARM DELETED ON THE PHONE, mid-window. Deleting a slot shifts the
@@ -1007,6 +1009,8 @@ int main(void) {
       assert(d.action == AC_WIN_REARM_ONLY);
       assert(d.deadline == 0);
       assert(d.abandon_screen);             // the cycle is over; free the screen
+      assert(d.reason == AC_WIN_REASON_BASIS_PAST);  // the discarded basis (07:30)
+                                                      // is already behind `now`
 
       // The contrast: no open window at all, same edit, same clock. Nothing today
       // -- which is what an open window must not be allowed to change.
@@ -1068,6 +1072,7 @@ int main(void) {
       assert(d.slot == -1);
       assert(d.end_cycle);
       assert(d.abandon_screen);
+      assert(d.reason == AC_WIN_REASON_NO_SLOT);  // no alarm left to resolve at all
 
       // 6b. Some alarms left, but the cycle names a slot past the end of the set.
       c.count = 1;
@@ -1276,6 +1281,28 @@ int main(void) {
       AcWindowDecision d = win_decide(&c);
       assert(d.action == AC_WIN_REARM_ONLY);
       assert(!d.end_cycle && !d.abandon_screen);
+      assert(d.reason == AC_WIN_REASON_WINDOW_AHEAD);  // the window is hours away
+    }
+
+    // THE TRIPWIRE FOR THE SMART-WINDOW-OFF GATE. Mutation testing proved that
+    // replacing `if (!smart_window_active) { return d; }` with `if (false)` left
+    // the whole suite green: no case above combines smart_window_active == false
+    // with a LIVE cycle, which is the only state where that branch matters (with
+    // no live cycle, `!live && basis == 0` or the served/no-slot guards already
+    // return first). Here a window IS open (07:20-07:50) and the setting is off;
+    // the ONLY thing standing between `now` and the escalating "not yet due, so
+    // continue the [window, deadline] I was already given" AC_WIN_OPEN outcome is
+    // this gate.
+    {
+      WinCase c = { .alarms = &daily, .count = 1, .now = at(2026, 8, 5, 7, 35),
+                    .semantics = SEMANTICS_RING_LATEST, .smart_window_active = false,
+                    .window_min = 0, .pending_slot = 0,
+                    .window_started_at = at(2026, 8, 5, 7, 20), .deadline_at = t0750,
+                    .served_slot = -1 };
+      AcWindowDecision d = win_decide(&c);
+      assert(d.action == AC_WIN_REARM_ONLY);
+      assert(!d.end_cycle);
+      assert(d.reason == AC_WIN_REASON_SMART_OFF);
     }
   }
 
