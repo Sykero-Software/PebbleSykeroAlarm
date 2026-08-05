@@ -11,7 +11,7 @@
 // window start no matter what. Neither the emulator nor a host test can answer
 // that -- only the watch's own recorded night can, and the only channel out of
 // the watch is `pebble logs`.
-#define SA_DEBUG_DUMP 1
+#define SA_DEBUG_DUMP 0
 
 #if SA_DEBUG_DUMP
 
