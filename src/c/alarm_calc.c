@@ -316,3 +316,7 @@ bool ac_apply_set_if_changed(const char *incoming, const char *last_applied,
   *count = ac_parse_set(incoming, out, max);
   return true;
 }
+
+bool ac_snooze_pending(uint8_t snooze_count, uint32_t ring_started_at, time_t now) {
+  return snooze_count > 0 && ring_started_at != 0 && (time_t)ring_started_at > now;
+}

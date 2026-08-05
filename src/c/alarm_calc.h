@@ -199,4 +199,16 @@ int ac_parse_set(const char *s, Alarm *out, int max);
 bool ac_apply_set_if_changed(const char *incoming, const char *last_applied,
                              Alarm *out, int *count, int max);
 
+// Is a snooze in flight at `now`? While one is, RunState.ring_started_at holds
+// its EXPIRY rather than a ring start (ring_snooze_now moves it forward so the
+// escalation ramp resumes in the right place), so all three parts matter: a
+// non-zero count, a non-zero stamp, and an expiry still ahead of us. Written
+// out by hand at every call site before this existed, and about to be written
+// out at three more -- the pending screen's launch check and both menus.
+//
+// Plain integers in, bool out: the caller passes RunState fields, so this stays
+// a pure function that a host test can reach without alarm_store.h (which
+// includes this header, so it could not be included back).
+bool ac_snooze_pending(uint8_t snooze_count, uint32_t ring_started_at, time_t now);
+
 #endif

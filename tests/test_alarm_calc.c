@@ -464,6 +464,22 @@ int main(void) {
     assert(ac_row_actions(&rep, NULL, AC_MAX_ACTIONS) == 0);
   }
 
+  // --- ac_snooze_pending: ring_started_at holds the snooze EXPIRY in flight ---
+  {
+    time_t base = at(2026, 8, 5, 7, 10);
+    // Expiry five minutes out: pending.
+    assert(ac_snooze_pending(1, (uint32_t)(base + 300), base));
+    // Expiry already passed -- the wakeup fired and the ring is running again.
+    assert(!ac_snooze_pending(1, (uint32_t)(base - 1), base));
+    // Exactly now is not "in the future": the expiry has arrived.
+    assert(!ac_snooze_pending(1, (uint32_t)base, base));
+    // Never snoozed: the same field then means the RING START, not an expiry,
+    // and a future ring start would otherwise read as a pending snooze.
+    assert(!ac_snooze_pending(0, (uint32_t)(base + 300), base));
+    // No stamp at all.
+    assert(!ac_snooze_pending(2, 0, base));
+  }
+
   printf("test_alarm_calc: all assertions passed\n");
   return 0;
 }
