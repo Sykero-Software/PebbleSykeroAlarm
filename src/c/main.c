@@ -23,10 +23,20 @@ static MenuLayer *s_main_menu;
 static Window    *s_list_window;
 static MenuLayer *s_list_menu;
 
-#define MAIN_ROW_ALARMS      0
-#define MAIN_ROW_LAST_NIGHT  1
-#define MAIN_ROW_TEST        2
-#define MAIN_ROW_COUNT       3
+// The main menu's rows are CONDITIONAL now (the ongoing-alarm row exists only
+// while something is ongoing), so a fixed index per row would drift the moment
+// a row appears. One table, built in one place, is the only thing that knows
+// the layout: get_num_rows, draw_row and select_click all read it, so an index
+// can never mean two different rows.
+typedef enum {
+  MAIN_ROW_ALARMS = 0,
+  MAIN_ROW_ONGOING,
+  MAIN_ROW_LAST_NIGHT,
+  MAIN_ROW_TEST,
+} MainRowKind;
+
+#define MAIN_ROW_MAX 4
+static MainRowKind s_main_row_kinds[MAIN_ROW_MAX];
 
 // NOTE -- NO WINDOW ANIMATIONS ANYWHERE IN THIS APP.
 //
@@ -848,12 +858,51 @@ static void open_last_night(void) {
   window_stack_push(s_night_window, false);
 }
 
+// Forward declaration: main_select (below) opens the pending screen, but its
+// real definition and the PENDING_WAITING/PENDING_SNOOZED mode constants live
+// further down with the rest of the pending-screen state (near main.c:1860),
+// which is physically AFTER main_select. Redeclaring an identical
+// prototype/macro pair here is legal C (same idiom this file already uses for
+// s_wait_window) and costs nothing.
+#define PENDING_WAITING 0
+#define PENDING_SNOOZED 1
+static void open_pending_window(int mode);
+
+// The live cycle, as the menu sees it. One call, so every row and caption in
+// this file agrees with the pending screen and with the launch-time repair.
+static AcCycleState menu_cycle_state(void) {
+  return ac_cycle_state(s_rs.pending_slot, s_rs.window_started_at,
+                        s_rs.ring_started_at, s_rs.snooze_count, time(NULL));
+}
+
+// Fills s_main_row_kinds in display order and returns how many rows there are.
+static int main_rows(void) {
+  int n = 0;
+  s_main_row_kinds[n++] = MAIN_ROW_ALARMS;
+  if (menu_cycle_state() != AC_CYCLE_NONE) {
+    // Directly after Alarms: the alarm summary stays the first thing on the
+    // screen, and this row APPEARING is itself the signal that something is
+    // ongoing -- which is why there is no permanent "none" row.
+    s_main_row_kinds[n++] = MAIN_ROW_ONGOING;
+  }
+  s_main_row_kinds[n++] = MAIN_ROW_LAST_NIGHT;
+  s_main_row_kinds[n++] = MAIN_ROW_TEST;
+  return n;
+}
+
+// The row kind at a visible index, or MAIN_ROW_ALARMS for an out-of-range index
+// (MenuLayer can ask about a row that has just disappeared under a reload).
+static MainRowKind main_row_kind(uint16_t row) {
+  int n = main_rows();
+  return (row < (uint16_t)n) ? s_main_row_kinds[row] : MAIN_ROW_ALARMS;
+}
+
 static uint16_t main_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
-  return MAIN_ROW_COUNT;
+  return (uint16_t)main_rows();
 }
 
 static void main_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void *ctx) {
-  switch (ci->row) {
+  switch (main_row_kind(ci->row)) {
     case MAIN_ROW_ALARMS: {
       // sub[32], not smaller: "snoozed, in " is 12 bytes and fmt_delta can fill
       // all 15 usable bytes of delta[16], so 28 is the bound gcc computes and 24
@@ -880,6 +929,41 @@ static void main_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
         snprintf(sub, sizeof(sub), "next in %s", delta);
       }
       menu_cell_basic_draw(gctx, cell, "Alarms", sub, NULL);
+      break;
+    }
+    case MAIN_ROW_ONGOING: {
+      // sub[32] for the same reason as the Alarms row: "snooze N, in " plus a
+      // full fmt_delta is the longest shape, and a tighter buffer is a real
+      // truncation rather than a warning to silence.
+      char sub[32];
+      time_t nw = time(NULL);
+      switch (menu_cycle_state()) {
+        case AC_CYCLE_SNOOZE: {
+          char delta[16];
+          fmt_delta((time_t)s_rs.ring_started_at, nw, delta, sizeof(delta));
+          snprintf(sub, sizeof(sub), "snooze %d, in %s", s_rs.snooze_count, delta);
+          break;
+        }
+        case AC_CYCLE_RINGING:
+          snprintf(sub, sizeof(sub), "alarm in progress");
+          break;
+        case AC_CYCLE_WINDOW: {
+          time_t dl = (time_t)s_rs.deadline_at;
+          struct tm *dtm = localtime(&dl);
+          snprintf(sub, sizeof(sub), "open, rings by %02d:%02d",
+                   dtm->tm_hour % 100, dtm->tm_min % 100);
+          break;
+        }
+        case AC_CYCLE_ORPHAN:
+          // ASCII only: Gothic has no glyph for an em dash or a multiplication
+          // sign, and renders one as a tofu box.
+          snprintf(sub, sizeof(sub), "stale - press to clear");
+          break;
+        default:
+          snprintf(sub, sizeof(sub), "none");
+          break;
+      }
+      menu_cell_basic_draw(gctx, cell, "Ongoing alarm", sub, NULL);
       break;
     }
     case MAIN_ROW_LAST_NIGHT:
@@ -913,8 +997,18 @@ static void add_test_alarm(void) {
 }
 
 static void main_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
-  switch (ci->row) {
+  switch (main_row_kind(ci->row)) {
     case MAIN_ROW_ALARMS:     open_alarm_list(); break;
+    // NO new cancel path: the pending screen already ends the cycle on DOWN 2x
+    // (wait_cancel_now stamps served_slot/served_at so the occurrence cannot
+    // ring again, clears the missed marker, re-arms and exits), and it carries
+    // the permanent legend that says so. This row is the ROUTE to it that the
+    // app was missing -- leaving that screen with BACK 2x deliberately does not
+    // cancel, so before this there was no way back to it at all.
+    case MAIN_ROW_ONGOING:
+      open_pending_window(menu_cycle_state() == AC_CYCLE_SNOOZE
+                              ? PENDING_SNOOZED : PENDING_WAITING);
+      break;
     case MAIN_ROW_LAST_NIGHT: open_last_night(); break;
     // A terminal action, so it leaves for the watchface -- which doubles as the
     // only confirmation the row has ever given. Safe to exit immediately:
@@ -2271,7 +2365,9 @@ int main(void) {
   //
   // Ending the cycle here is the whole fix: it runs BEFORE the launch sc_rearm
   // below, so no re-entry is placed and the stale deadline can never be read.
-  if (s_rs.window_started_at != 0 && s_rs.pending_slot < 0) {
+  if (ac_cycle_state(s_rs.pending_slot, s_rs.window_started_at,
+                     s_rs.ring_started_at, s_rs.snooze_count,
+                     time(NULL)) == AC_CYCLE_ORPHAN) {
     APP_LOG(APP_LOG_LEVEL_WARNING,
             "orphaned cycle at launch (window=%lu deadline=%lu, no owning alarm)"
             " -- ending it",
