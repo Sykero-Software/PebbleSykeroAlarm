@@ -559,6 +559,54 @@ int main(void) {
     d = ac_dispatch_wakeup(ab, 2, t0705 - 120, -1, 0, 0, 0, t0700, 0);
     assert(d.action == AC_WAKE_RING_DEADLINE);
     assert(d.slot == 1);
+
+    // REGRESSION: SEMANTICS_RING_FROM's deadline sits AFTER the raw occurrence
+    // (lead_s is negative there), so a fixed `now - tol` search base searches
+    // forward from a point already well past the alarm's own occurrence and
+    // lands on tomorrow's instead -- a due alarm that has never rung gets
+    // reported as "nothing due". A at 07:00 with a 10-minute window: deadline
+    // is 07:10, so lead_s = -600 (deadline = when - lead_s = when + 600). At
+    // the deadline instant, with nothing served and no live cycle, this MUST
+    // ring.
+    d = ac_dispatch_wakeup(ab, 1, t0700 + 600, -1, 0, 0, -1, 0, -600);
+    assert(d.action == AC_WAKE_RING_DEADLINE);
+    assert(d.slot == 0);
+
+    // SEMANTICS_AWAKE_BY: lead_s positive (the escalation's full development
+    // time), deadline BEFORE the alarm time. 15 minutes of development: at the
+    // deadline instant (07:00 - 900s), this must ring too.
+    d = ac_dispatch_wakeup(ab, 1, t0700 - 900, -1, 0, 0, -1, 0, 900);
+    assert(d.action == AC_WAKE_RING_DEADLINE);
+    assert(d.slot == 0);
+
+    // Same RING_FROM window (lead_s negative again), but well before the
+    // deadline: not due yet, and no live cycle -- NONE, proving the shifted
+    // search base did not turn into "always find something".
+    d = ac_dispatch_wakeup(ab, 1, t0700, -1, 0, 0, -1, 0, -600);
+    assert(d.action == AC_WAKE_NONE);
+
+    // alarms == NULL: nothing to consult, nothing live.
+    d = ac_dispatch_wakeup(NULL, 0, t0700, -1, 0, 0, -1, 0, 0);
+    assert(d.action == AC_WAKE_NONE);
+    assert(d.slot == -1);
+
+    // pending_slot == count exactly is the boundary case, not a far-out index:
+    // still out of range, still not live.
+    d = ac_dispatch_wakeup(ab, 1, t0701, 1 /*== count*/, (uint32_t)t0711, 1,
+                           0, t0700, 0);
+    assert(d.action == AC_WAKE_NONE);
+    assert(d.slot == -1);
+
+    // RESUME/KEEP boundary on the snooze expiry: exactly at now + tol resumes;
+    // one second later it has not expired yet and the cycle is left alone.
+    d = ac_dispatch_wakeup(ab, 1, t0700, 0,
+                           (uint32_t)(t0700 + AC_SERVED_TOLERANCE_S), 1, 0, t0700, 0);
+    assert(d.action == AC_WAKE_RESUME);
+    assert(d.slot == 0);
+
+    d = ac_dispatch_wakeup(ab, 1, t0700, 0,
+                           (uint32_t)(t0700 + AC_SERVED_TOLERANCE_S + 1), 1, 0, t0700, 0);
+    assert(d.action == AC_WAKE_KEEP);
   }
 
   printf("test_alarm_calc: all assertions passed\n");

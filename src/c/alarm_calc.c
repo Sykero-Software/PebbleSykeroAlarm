@@ -335,10 +335,23 @@ AcWakeDecision ac_dispatch_wakeup(const Alarm *alarms, int count, time_t now,
 
   // 1. A DUE DEADLINE, first -- this is what makes a second alarm's deadline beat
   //    a pending snooze, including when they coincide.
+  //
+  //    The search base is shifted by lead_s, not just by -tol: we want
+  //    occurrences whose DEADLINE (when - lead_s) lands in [now - tol, now +
+  //    tol], and ac_next_alarm_unserved only searches forward of the base it is
+  //    given, so the occurrence window is the deadline window shifted by
+  //    lead_s. Without the shift, SEMANTICS_RING_FROM (lead_s negative, the
+  //    deadline sits AFTER the raw occurrence by up to a 60-minute window) would
+  //    search forward from a point already well past today's occurrence and
+  //    land on tomorrow's -- a due alarm that has never rung reported as
+  //    "nothing due". The shift keeps the lower bound intact for every sign of
+  //    lead_s: from when > now - tol + lead_s it follows that when - lead_s >
+  //    now - tol, so a deadline that passed long ago still cannot be picked up.
+  //    lead_s == 0 (RING_LATEST) reduces this to the original `now - tol`.
   if (alarms != NULL && count > 0) {
     time_t when = 0;
-    int slot = ac_next_alarm_unserved(alarms, count, now - tol, served_slot,
-                                      served_at, lead_s, &when);
+    int slot = ac_next_alarm_unserved(alarms, count, now - tol + (time_t)lead_s,
+                                      served_slot, served_at, lead_s, &when);
     if (slot >= 0 && when != 0 && (when - (time_t)lead_s) <= now + tol) {
       d.action = AC_WAKE_RING_DEADLINE;
       d.slot = slot;
