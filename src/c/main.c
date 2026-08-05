@@ -855,7 +855,11 @@ static uint16_t main_num_rows(MenuLayer *ml, uint16_t section, void *ctx) {
 static void main_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void *ctx) {
   switch (ci->row) {
     case MAIN_ROW_ALARMS: {
-      char sub[24];
+      // sub[32], not smaller: "snoozed, in " is 12 bytes and fmt_delta can fill
+      // all 15 usable bytes of delta[16], so 28 is the bound gcc computes and 24
+      // is genuinely one short -- a tighter buffer is a real truncation rather
+      // than a warning to silence (same reasoning as list_draw_row's state/sub).
+      char sub[32];
       time_t when = 0;
       time_t nw = time(NULL);
       int slot = ac_next_alarm_unserved(
