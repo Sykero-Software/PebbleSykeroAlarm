@@ -198,6 +198,27 @@ static int snoozed_slot(void) {
   return (slot >= 0 && slot < s_count) ? slot : -1;
 }
 
+// pending_slot as the CYCLE CLASSIFIER must see it: an index that no longer names
+// an alarm is no owner at all, which is what makes ac_cycle_state report
+// AC_CYCLE_ORPHAN (and the launch-time repair then ends the cycle).
+//
+// Same bound, and the same reason, as snoozed_slot just above -- the phone can
+// delete slots while a cycle is live. ac_cycle_state cannot apply it itself: it
+// takes plain integers so it stays pure and host-testable, so it knows nothing
+// about s_count and only tests `pending_slot < 0`. Every OTHER reader in this app
+// bounds the field (snoozed_slot, ac_dispatch_wakeup's cycle_live, the
+// WC_WINDOW/WC_REENTRY handler's own check); the two ac_cycle_state call sites did
+// not, and deleting the WHOLE alarm set while a window was open then left a cycle
+// that nothing could clear: the menu advertised "rings by 08:20" for an alarm that
+// no longer existed, the launch repair called it AC_CYCLE_WINDOW rather than
+// AC_CYCLE_ORPHAN and left it standing, and sc_rearm re-armed the rolling
+// re-entry (it is armed on window_started_at != 0 alone) so the watch woke the app
+// every SC_REENTRY_GAP_S for ever.
+static int8_t cycle_owner_slot(void) {
+  int slot = s_rs.pending_slot;
+  return (slot >= 0 && slot < s_count) ? (int8_t)slot : (int8_t)-1;
+}
+
 static void refresh_list(void) {
   if (s_list_menu) {
     menu_layer_reload_data(s_list_menu);
@@ -872,7 +893,7 @@ static void open_pending_window(int mode);
 // The live cycle, as the menu sees it. One call, so every row and caption in
 // this file agrees with the pending screen and with the launch-time repair.
 static AcCycleState menu_cycle_state(void) {
-  return ac_cycle_state(s_rs.pending_slot, s_rs.window_started_at,
+  return ac_cycle_state(cycle_owner_slot(), s_rs.window_started_at,
                         s_rs.ring_started_at, s_rs.snooze_count, time(NULL));
 }
 
@@ -2174,6 +2195,33 @@ static void open_smart_window(int slot, time_t window_start, time_t deadline) {
   poll_cb(NULL);   // evaluate immediately
 }
 
+// A CYCLE WAS JUST ENDED AND NOTHING IS BEING OPENED IN ITS PLACE: don't leave
+// the waiting screen stranded on a dead cycle.
+//
+// With window_started_at cleared, poll_cb's next tick returns early for ever (its
+// guard checks that field first), so the 1-minute poll is dead weight; and the
+// waiting screen's BACK is deliberately a no-op (it must not be possible to
+// cancel a smart window by brushing a button in your sleep), so nothing would
+// bring the user back to the watchface. Worse, the screen keeps DESCRIBING the
+// dead cycle: deadline_at is now 0, which the caption renders through
+// localtime(0) as "Alarm 02:00 / Waiting for light sleep".
+//
+// Only ever called with s_ringing false (the ring owns the screen otherwise), so
+// closing to the watchface here cannot interrupt an alarm.
+//
+// One helper, three callers (the AC_WAKE_NONE branch this was extracted from, and
+// both of the WC_WINDOW/WC_REENTRY paths that end a cycle without opening a new
+// window), so the three cannot drift apart.
+static void abandon_waiting_screen(void) {
+  if (s_poll_timer) {
+    app_timer_cancel(s_poll_timer);
+    s_poll_timer = NULL;
+  }
+  if (s_wait_window && window_stack_contains_window(s_wait_window)) {
+    close_to_watchface();
+  }
+}
+
 static void handle_wakeup_cookie(int32_t cookie) {
   time_t now = time(NULL);
   switch (cookie) {
@@ -2237,18 +2285,9 @@ static void handle_wakeup_cookie(int32_t cookie) {
         runstate_end_cycle();
         as_save_runstate(&s_rs);
         // If the waiting screen happens to be up for this now-invalid window,
-        // don't leave it stranded: with window_started_at cleared, poll_cb's next
-        // tick returns early forever (its guard checks that field first) and BACK
-        // is deliberately a no-op there, so nothing would bring the user back to
-        // the watchface. s_ringing is guaranteed false here (checked at the top
-        // of this case), so this is safe.
-        if (s_poll_timer) {
-          app_timer_cancel(s_poll_timer);
-          s_poll_timer = NULL;
-        }
-        if (s_wait_window && window_stack_contains_window(s_wait_window)) {
-          close_to_watchface();
-        }
+        // don't leave it stranded (see abandon_waiting_screen). s_ringing is
+        // guaranteed false here -- checked at the top of this case.
+        abandon_waiting_screen();
         sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
       }
       break;
@@ -2274,6 +2313,26 @@ static void handle_wakeup_cookie(int32_t cookie) {
         when = ac_next_occurrence(&s_alarms[slot], now - 60);
       }
       if (slot < 0) {
+        // There is no alarm to resolve at all -- every slot is gone or disabled.
+        // A live WINDOW cannot survive that: nothing will ever ring it, no screen
+        // can describe it, and sc_rearm re-arms the rolling re-entry on
+        // window_started_at != 0 alone, so leaving it standing wakes the app every
+        // SC_REENTRY_GAP_S for ever (the state the phone leaves behind by deleting
+        // ALL alarms while a window is open). Gated on window_started_at
+        // specifically, NOT on "any live cycle": ring_started_at may hold a
+        // pending snooze, which is a promise already made to the user and is
+        // ended by nothing here (start_ring zeroes window_started_at, so a snooze
+        // never has a live window and can never reach this).
+        if (s_rs.window_started_at != 0) {
+          APP_LOG(APP_LOG_LEVEL_WARNING,
+                  "no alarm left to arm: ending the live window cycle "
+                  "(window=%lu deadline=%lu)",
+                  (unsigned long)s_rs.window_started_at,
+                  (unsigned long)s_rs.deadline_at);
+          runstate_end_cycle();
+          as_save_runstate(&s_rs);
+          abandon_waiting_screen();
+        }
         sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
         break;
       }
@@ -2417,12 +2476,15 @@ int main(void) {
     }
   }
 
-  // An ORPHANED CYCLE: the alarm that owned the live cycle is gone, so
-  // pending_slot is -1 while window_started_at still says a smart window is
-  // open. Only the prune above can produce that state (every path that opens a
-  // window sets a real slot), and it is exactly what the built-in Test alarm
-  // leaves behind: the test alarm opens a window, gets auto-disabled, and is
-  // pruned on the next launch -- taking its own slot reference with it.
+  // An ORPHANED CYCLE: the alarm that owned the live cycle is gone, so there is
+  // no owning slot (pending_slot is -1, or -- via cycle_owner_slot -- an index
+  // past the end of the alarm array) while window_started_at still says a smart
+  // window is open. Two things produce it. The prune above: it is exactly what
+  // the built-in Test alarm leaves behind (the test alarm opens a window, gets
+  // auto-disabled, and is pruned on the next launch -- taking its own slot
+  // reference with it). And the phone deleting alarms while a window is open,
+  // which shrinks the array under a pending_slot that still points into it -- in
+  // the limit deleting them ALL, leaving s_count == 0 with pending_slot == 0.
   //
   // Left standing, the orphan is not inert. sc_rearm keeps re-arming the rolling
   // WC_REENTRY (it is armed on window_started_at != 0 alone) so the app is woken
@@ -2436,7 +2498,7 @@ int main(void) {
   //
   // Ending the cycle here is the whole fix: it runs BEFORE the launch sc_rearm
   // below, so no re-entry is placed and the stale deadline can never be read.
-  if (ac_cycle_state(s_rs.pending_slot, s_rs.window_started_at,
+  if (ac_cycle_state(cycle_owner_slot(), s_rs.window_started_at,
                      s_rs.ring_started_at, s_rs.snooze_count,
                      time(NULL)) == AC_CYCLE_ORPHAN) {
     APP_LOG(APP_LOG_LEVEL_WARNING,
