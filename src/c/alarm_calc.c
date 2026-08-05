@@ -320,3 +320,55 @@ bool ac_apply_set_if_changed(const char *incoming, const char *last_applied,
 bool ac_snooze_pending(uint8_t snooze_count, uint32_t ring_started_at, time_t now) {
   return snooze_count > 0 && ring_started_at != 0 && (time_t)ring_started_at > now;
 }
+
+AcWakeDecision ac_dispatch_wakeup(const Alarm *alarms, int count, time_t now,
+                                  int pending_slot, uint32_t ring_started_at,
+                                  uint8_t snooze_count,
+                                  int served_slot, time_t served_at, int32_t lead_s) {
+  AcWakeDecision d = { .action = AC_WAKE_NONE, .slot = -1 };
+  const time_t tol = (time_t)AC_SERVED_TOLERANCE_S;
+
+  // A cycle only counts as live if the slot it names still exists: the phone can
+  // delete alarms while a wakeup is in flight, and a stale index must never come
+  // back as a slot to ring.
+  bool cycle_live = (alarms != NULL && pending_slot >= 0 && pending_slot < count);
+
+  // 1. A DUE DEADLINE, first -- this is what makes a second alarm's deadline beat
+  //    a pending snooze, including when they coincide.
+  if (alarms != NULL && count > 0) {
+    time_t when = 0;
+    int slot = ac_next_alarm_unserved(alarms, count, now - tol, served_slot,
+                                      served_at, lead_s, &when);
+    if (slot >= 0 && when != 0 && (when - (time_t)lead_s) <= now + tol) {
+      d.action = AC_WAKE_RING_DEADLINE;
+      d.slot = slot;
+      return d;
+    }
+  }
+
+  // 2. THIS CYCLE'S OWN RING IS DUE, OR ALREADY RUNNING. One test covers both,
+  //    because ring_started_at is the same field either way: a snooze whose
+  //    expiry has arrived (it holds the expiry), and a mid-ring keep-alive
+  //    arriving after an eviction (it holds the ring start, already in the past).
+  //    Both must RESUME rather than start fresh, so the escalation ramp
+  //    continues instead of restarting at its gentlest stage. A snooze still in
+  //    the future fails this test and falls through to KEEP below -- which is
+  //    the whole point: nothing here may end a snooze that has not expired.
+  //    The tolerance absorbs an E_RANGE-shifted wakeup firing up to two minutes
+  //    early.
+  if (cycle_live && ring_started_at != 0 && (time_t)ring_started_at <= now + tol) {
+    d.action = AC_WAKE_RESUME;
+    d.slot = pending_slot;
+    return d;
+  }
+
+  // 3. A live cycle with nothing due: leave it completely alone. This is what
+  //    protects a pending snooze from being ended by a stray wakeup -- returning
+  //    NONE here is exactly the bug (NONE ends the cycle).
+  if (cycle_live) {
+    d.action = AC_WAKE_KEEP;
+    return d;
+  }
+
+  return d;   // AC_WAKE_NONE
+}

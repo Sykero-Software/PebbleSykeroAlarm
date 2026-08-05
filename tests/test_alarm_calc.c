@@ -480,6 +480,87 @@ int main(void) {
     assert(!ac_snooze_pending(2, 0, base));
   }
 
+  // --- ac_dispatch_wakeup: which alarm is a deadline/snooze wakeup FOR? ---
+  {
+    // A at 07:00 and B at 07:05, both Mon-Fri. lead_s = 0 (RING_LATEST, the
+    // default: the deadline IS the alarm time).
+    Alarm ab[2] = {
+      { .minute_of_day = 7 * 60,      .weekday_mask = 0x1F, .enabled = true },
+      { .minute_of_day = 7 * 60 + 5,  .weekday_mask = 0x1F, .enabled = true },
+    };
+    time_t t0700 = at(2026, 8, 5, 7, 0);    // Wednesday
+    time_t t0701 = at(2026, 8, 5, 7, 1);
+    time_t t0705 = at(2026, 8, 5, 7, 5);
+    time_t t0711 = at(2026, 8, 5, 7, 11);
+
+    // THE REGRESSION THIS FUNCTION EXISTS FOR. A rang at 07:00 and was snoozed
+    // at 07:01 until 07:11, so pending_slot is 0 and served is (0, 07:00). B's
+    // own deadline fires at 07:05. The answer must be B -- reading pending_slot
+    // instead rang A again, restarted its ramp, destroyed the snooze, and lost
+    // B silently until tomorrow.
+    AcWakeDecision d = ac_dispatch_wakeup(ab, 2, t0705,
+                                          0 /*pending_slot*/, (uint32_t)t0711,
+                                          1 /*snooze_count*/,
+                                          0 /*served_slot*/, t0700, 0 /*lead_s*/);
+    assert(d.action == AC_WAKE_RING_DEADLINE);
+    assert(d.slot == 1);
+
+    // The same cycle one minute in, with nothing else due: the snooze must be
+    // left strictly alone. KEEP, not NONE -- NONE ends the cycle, which is what
+    // erased the snooze.
+    d = ac_dispatch_wakeup(ab, 1 /*only A exists*/, t0701,
+                           0, (uint32_t)t0711, 1, 0, t0700, 0);
+    assert(d.action == AC_WAKE_KEEP);
+
+    // The snooze expiry itself: resume A's ring, continuing the cycle.
+    d = ac_dispatch_wakeup(ab, 1, t0711, 0, (uint32_t)t0711, 1, 0, t0700, 0);
+    assert(d.action == AC_WAKE_RESUME);
+    assert(d.slot == 0);
+
+    // A snooze expiry and another alarm's deadline coinciding: the deadline
+    // wins (the user's decision, 2026-08-05 -- a backup alarm must ring).
+    d = ac_dispatch_wakeup(ab, 2, t0705, 0, (uint32_t)t0705, 1, 0, t0700, 0);
+    assert(d.action == AC_WAKE_RING_DEADLINE);
+    assert(d.slot == 1);
+
+    // A mid-ring keep-alive after an eviction: A's ring started at 07:00 and was
+    // never dismissed (snooze_count 0, ring_started_at in the past). Resume it,
+    // so the escalation ramp continues instead of restarting.
+    d = ac_dispatch_wakeup(ab, 1, t0700 + 240, 0, (uint32_t)t0700, 0, 0, t0700, 0);
+    assert(d.action == AC_WAKE_RESUME);
+    assert(d.slot == 0);
+
+    // No alarms at all: nothing to ring, nothing live.
+    d = ac_dispatch_wakeup(ab, 0, t0705, -1, 0, 0, -1, 0, 0);
+    assert(d.action == AC_WAKE_NONE);
+
+    // A stale pending_slot -- the phone deleted alarms while this wakeup was in
+    // flight -- must never come back as a slot to ring. Nothing else is due here
+    // (A's 07:00 is served and its next occurrence is tomorrow), so the honest
+    // answer is NONE with no slot, and the caller's cleanup branch runs.
+    d = ac_dispatch_wakeup(ab, 1, t0711, 5 /*out of range*/, (uint32_t)t0711, 1,
+                           0, t0700, 0);
+    assert(d.action == AC_WAKE_NONE);
+    assert(d.slot == -1);
+
+    // An unserved alarm whose deadline passed a minute ago IS due -- the wakeup
+    // may have been late, and an alarm that has not rung must still ring.
+    d = ac_dispatch_wakeup(ab, 1, t0701, -1, 0, 0, -1, 0, 0);
+    assert(d.action == AC_WAKE_RING_DEADLINE);
+    assert(d.slot == 0);
+
+    // A disabled alarm's occurrence is not due, and no cycle is live.
+    Alarm off1 = { .minute_of_day = 7 * 60, .weekday_mask = 0x1F, .enabled = false };
+    d = ac_dispatch_wakeup(&off1, 1, t0700, -1, 0, 0, -1, 0, 0);
+    assert(d.action == AC_WAKE_NONE);
+
+    // The tolerance works in both directions: a deadline two minutes AHEAD of
+    // now (an E_RANGE-shifted wakeup firing early) still counts as due.
+    d = ac_dispatch_wakeup(ab, 2, t0705 - 120, -1, 0, 0, 0, t0700, 0);
+    assert(d.action == AC_WAKE_RING_DEADLINE);
+    assert(d.slot == 1);
+  }
+
   printf("test_alarm_calc: all assertions passed\n");
   return 0;
 }

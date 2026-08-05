@@ -211,4 +211,46 @@ bool ac_apply_set_if_changed(const char *incoming, const char *last_applied,
 // includes this header, so it could not be included back).
 bool ac_snooze_pending(uint8_t snooze_count, uint32_t ring_started_at, time_t now);
 
+// WHICH ALARM IS A WC_DEADLINE/WC_SNOOZE WAKEUP ACTUALLY FOR?
+//
+// Not "which cycle is in progress" -- that is RunState.pending_slot, and reading
+// it as the answer to this question is the defect this function exists to fix
+// (backlog item 20, 2026-08-05). sc_rearm arms the next UNSERVED alarm's own
+// deadline at priority 1 regardless of which alarm is mid-cycle, so a second
+// alarm's deadline routinely lands inside a first alarm's live cycle. Ringing
+// the first alarm there restarted its ramp, destroyed its snooze, mis-stamped
+// the served record, and lost the second alarm silently until the next day.
+//
+// The wakeup cookie carries no slot (it cannot -- a WakeupId is lost when the
+// app is killed), so the answer has to be re-derived from the clock, the alarms
+// and RunState. That is pure arithmetic, hence this module.
+typedef enum {
+  AC_WAKE_NONE = 0,       // nothing due and no live cycle: end the stale cycle, re-arm
+  AC_WAKE_KEEP,           // nothing due but a cycle IS live: re-arm only, touch nothing
+  AC_WAKE_RESUME,         // continue this cycle's ring: a snooze expired, or a mid-ring
+                          // keep-alive arrived after an eviction. One outcome for both,
+                          // because ring_started_at is the same field either way and both
+                          // want from_deadline = false, so the escalation ramp resumes
+                          // instead of restarting at its gentlest stage.
+  AC_WAKE_RING_DEADLINE,  // this alarm's own deadline is due: a fresh ring
+} AcWakeAction;
+
+typedef struct {
+  AcWakeAction action;
+  int          slot;      // meaningful for AC_WAKE_RESUME and AC_WAKE_RING_DEADLINE; -1 otherwise
+} AcWakeDecision;
+
+// `lead_s` is the occurrence-to-deadline offset the callers already compute
+// (now - sc_ring_deadline(cfg, now)), so an occurrence's deadline is
+// `when - lead_s`. Signed: SEMANTICS_RING_FROM puts the deadline AFTER the alarm
+// time. `ring_started_at` and `snooze_count` are RunState's, with
+// ring_started_at's usual overload (the ring start during a ring, the snooze
+// EXPIRY while a snooze is in flight). A due deadline is checked FIRST, so a
+// second alarm's deadline beats a pending snooze even when the two coincide --
+// the user's decision (2026-08-05): a backup alarm that stays silent is useless.
+AcWakeDecision ac_dispatch_wakeup(const Alarm *alarms, int count, time_t now,
+                                  int pending_slot, uint32_t ring_started_at,
+                                  uint8_t snooze_count,
+                                  int served_slot, time_t served_at, int32_t lead_s);
+
 #endif
