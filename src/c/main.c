@@ -1274,17 +1274,20 @@ static void hint_hide_cb(void *data) {
   layer_set_hidden(text_layer_get_layer(s_ring_sub), false);
 }
 
-static void show_press_again_hint(void) {
+static void show_press_again_hint(const char *verb) {
   // Guarded for the same reason as update_ring_text.
   if (!s_ring_hint || !s_ring_sub) {
     return;
   }
-  static char hint[24];
+  static char hint[28];
   // Plain ASCII "x", not the U+00D7 multiplication sign: GOTHIC_18_BOLD has no
   // glyph for it, so it rendered as a tofu box ("2<box> = Stop") on the actual
   // ring screen -- confirmed by pixel-zooming an emulator screenshot. This is
   // the one instruction a half-asleep user actually reads, so it must render.
-  snprintf(hint, sizeof(hint), "Press %dx to stop", STOP_PRESSES);
+  //
+  // STOP_PRESSES is still formatted in rather than spelled out in the literal,
+  // so both buttons keep saying the number they actually require.
+  snprintf(hint, sizeof(hint), "Press %dx to %s", STOP_PRESSES, verb);
   text_layer_set_text(s_ring_hint, hint);
   // The hint reuses the subtitle's exact slot (see ring_window_load) rather
   // than needing its own vertical room, which the 144x168 boards do not have
@@ -1305,12 +1308,20 @@ static void ring_down_multi(ClickRecognizerRef rec, void *ctx) {
     // Without this the button is bound only to a multi-click and a single press
     // does nothing at all, which feels broken and makes the user press again too
     // slowly for the 400 ms window.
-    show_press_again_hint();
+    show_press_again_hint("stop");
   }
 }
 
-static void ring_up(ClickRecognizerRef rec, void *ctx) {
-  ring_snooze_now();
+// TWO presses, exactly like Stop (reported from the wrist 2026-08-05). One
+// button found by feel in the dark must never change what the alarm does on
+// the first press -- and a snooze IS a change: it silences a ringing alarm for
+// ten minutes. The first press only says what the second would do.
+static void ring_up_multi(ClickRecognizerRef rec, void *ctx) {
+  if (click_number_of_clicks_counted(rec) >= STOP_PRESSES) {
+    ring_snooze_now();
+  } else {
+    show_press_again_hint("snooze");
+  }
 }
 
 // BACK and SELECT are bound EXPLICITLY to a no-op. An unbound BACK pops the
@@ -1319,7 +1330,8 @@ static void ring_up(ClickRecognizerRef rec, void *ctx) {
 static void ring_noop(ClickRecognizerRef rec, void *ctx) {}
 
 static void ring_click_config(void *ctx) {
-  window_single_click_subscribe(BUTTON_ID_UP, ring_up);
+  window_multi_click_subscribe(BUTTON_ID_UP, 1, STOP_PRESSES, 400, false,
+                               ring_up_multi);
   window_multi_click_subscribe(BUTTON_ID_DOWN, 1, STOP_PRESSES, 400, false,
                                ring_down_multi);
   window_single_click_subscribe(BUTTON_ID_BACK, ring_noop);
