@@ -33,9 +33,10 @@ typedef enum {
   MAIN_ROW_ONGOING,
   MAIN_ROW_LAST_NIGHT,
   MAIN_ROW_TEST,
+  MAIN_ROW_DUMP,
 } MainRowKind;
 
-#define MAIN_ROW_MAX 4
+#define MAIN_ROW_MAX 5
 static MainRowKind s_main_row_kinds[MAIN_ROW_MAX];
 
 // NOTE -- NO WINDOW ANIMATIONS ANYWHERE IN THIS APP.
@@ -886,7 +887,13 @@ static int main_rows(void) {
     s_main_row_kinds[n++] = MAIN_ROW_ONGOING;
   }
   s_main_row_kinds[n++] = MAIN_ROW_LAST_NIGHT;
+#if SA_DEV_MENU
   s_main_row_kinds[n++] = MAIN_ROW_TEST;
+#if SA_DEBUG_DUMP
+  // Both flags: with SA_DEBUG_DUMP 0 there is no dbg_dump to call.
+  s_main_row_kinds[n++] = MAIN_ROW_DUMP;
+#endif
+#endif
   return n;
 }
 
@@ -972,6 +979,9 @@ static void main_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
     case MAIN_ROW_TEST:
       menu_cell_basic_draw(gctx, cell, "Test alarm", "rings in 2 min", NULL);
       break;
+    case MAIN_ROW_DUMP:
+      menu_cell_basic_draw(gctx, cell, "Dump last night", "to pebble logs", NULL);
+      break;
     default:
       break;
   }
@@ -996,6 +1006,10 @@ static void add_test_alarm(void) {
   reload_and_rearm();
 }
 
+// Defined next to s_night further down -- the dump borrows that buffer, so the
+// wrapper lives where the buffer does and only its name is needed up here.
+static void dump_last_night(void);
+
 static void main_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
   switch (main_row_kind(ci->row)) {
     case MAIN_ROW_ALARMS:     open_alarm_list(); break;
@@ -1017,6 +1031,9 @@ static void main_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
     // deliberately do NOT do this (the user may want to set two in a row, and idle
     // auto-exit already gets them out).
     case MAIN_ROW_TEST:       add_test_alarm(); close_to_watchface(); break;
+    // Stays on the menu, unlike the Test alarm: the dump paces itself over
+    // app_timer ticks for several seconds and needs the app alive to finish.
+    case MAIN_ROW_DUMP:      dump_last_night(); break;
     default: break;
   }
 }
@@ -1751,6 +1768,10 @@ static AppTimer  *s_poll_timer;
 #define S_NIGHT_LEN 1
 #endif
 static SleepMinute s_night[S_NIGHT_LEN];
+
+static void dump_last_night(void) {
+  dbg_dump(s_alarms, s_count, &s_cfg, &s_rs, s_night, S_NIGHT_LEN);
+}
 
 static void wait_window_update(void) {
   // Guarded for the same reason as update_ring_text: a timer callback (the
@@ -2545,11 +2566,10 @@ int main(void) {
     app_timer_register(WAKEUP_LAUNCH_EXIT_MS, wakeup_launch_exit_cb, NULL);
   }
 
-  // TEMPORARY (2026-08-01): dump the past night to `pebble logs` so the
-  // "rang 30 minutes early" report can be read off the watch's own recorded
-  // data instead of guessed at. Compiled out by SA_DEBUG_DUMP = 0, and it
-  // declines to run while a smart window or ring is live -- it borrows s_night.
-  dbg_dump(s_alarms, s_count, &s_cfg, &s_rs, s_night, S_NIGHT_LEN);
+  // The dump is no longer run at launch: measured on the watch it held the event
+  // loop for 1.5-4 s right after start-up, which read as the app being stuck.
+  // It is a menu action now (MAIN_ROW_DUMP), so the data is still one press away
+  // on a development build and costs a shipped app nothing.
 
   app_event_loop();
 

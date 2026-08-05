@@ -96,6 +96,10 @@ contract and Clay config) **and** every host-side C test suite
 `sleep_eval` and the phone↔watch pack contract) — no Pebble SDK or emulator
 needed for either.
 
+> The **Test alarm** and **Dump last night** rows are development-build only
+> (`SA_DEV_MENU` in `src/c/debug_dump.h`); a release build is compiled with
+> `SA_DEV_MENU 0` and shows neither.
+
 ## Design docs
 
 Specs and implementation plans live in the superrepo, under

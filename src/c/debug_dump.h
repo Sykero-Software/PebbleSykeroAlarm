@@ -4,14 +4,16 @@
 #include "alarm_store.h"
 #include "sleep_eval.h"
 
-// TEMPORARY DEBUG INSTRUMENTATION -- flip to 0 (or delete both files) before
-// publishing. Added 2026-08-01 to diagnose a ring that started ~30 minutes
-// before a 07:50 alarm on the real watch: the smart window opens exactly then,
-// so the question is whether se_evaluate fired on real movement or fires at
-// window start no matter what. Neither the emulator nor a host test can answer
-// that -- only the watch's own recorded night can, and the only channel out of
-// the watch is `pebble logs`.
-#define SA_DEBUG_DUMP 0
+#define SA_DEBUG_DUMP 1
+
+// Development-build rows in the main menu: "Test alarm" and "Dump last night".
+// Both are deliberate user actions that a shipped alarm clock has no business
+// offering, and the dump in particular used to run on EVERY launch -- measured
+// on the watch, that held the event loop for 1.5-4 s (paced APP_LOG bursts plus
+// a synchronous read of up to 640 minutes of health history), which is the
+// "buttons do not respond when I open the app" the user reported. A release
+// build sets this to 0; the instrumentation itself can then stay in the tree.
+#define SA_DEV_MENU 1
 
 #if SA_DEBUG_DUMP
 
