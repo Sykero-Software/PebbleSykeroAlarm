@@ -2139,9 +2139,34 @@ static void poll_cb(void *data) {
     start_ring(s_rs.pending_slot, true);
     return;
   }
-  SleepEvalResult r;
+  // Zero-initialised, not just declared: smart_should_ring returns false without
+  // writing *out on the health-unavailable path, and the check below reads it.
+  SleepEvalResult r = {0};
   if (smart_should_ring(&r)) {
     APP_LOG(APP_LOG_LEVEL_INFO, "SMART firing early at acc=%lu", (unsigned long)r.acc);
+    start_ring(s_rs.pending_slot, false);
+    return;
+  }
+
+  // CANNOT JUDGE THIS NIGHT AT ALL, under SEMANTICS_RING_FROM: ring at the set
+  // time rather than sitting out the window.
+  //
+  // In that mode the set time is the EARLIEST allowed ring and the hard deadline
+  // is at the far end of the window, so standing down costs the user the whole
+  // window -- the alarm rings up to `smart_window_min` LATE for a night it never
+  // evaluated. Measured on the recorded night of 2026-08-05 (replayed in
+  // tests/test_sleep_sessions.c): a night waking at 07:20 left the population
+  // below SE_MIN_USABLE for every minute of a 07:50-08:20 window, so a 07:50
+  // alarm would have rung at 08:20. Ringing at the window's start is never late
+  // and never earlier than what the user asked for, which is the whole promise
+  // of this mode; the smart alarm simply degrades to a plain alarm for that
+  // night. The other modes put the deadline AT the set time, so standing down
+  // there already rings exactly on time and needs no special case.
+  if ((!s_last_read.available || s_last_read.window_start < 0 || r.insufficient_data)
+      && s_cfg.time_semantics == SEMANTICS_RING_FROM) {
+    APP_LOG(APP_LOG_LEVEL_INFO,
+            "SMART cannot judge (avail=%d insuf=%d) -- ringing at the set time",
+            (int)s_last_read.available, (int)r.insufficient_data);
     start_ring(s_rs.pending_slot, false);
     return;
   }

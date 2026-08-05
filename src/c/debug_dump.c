@@ -75,27 +75,36 @@ static const char *prv_fmt_mod(uint16_t mod, char *buf, int n) {
 #define DBG_CHUNK 60
 static HealthMinuteData s_chunk[DBG_CHUNK];
 
-// The firmware's own sleep-session start. hr_read_night anchors the ranking
-// population there, so a replay that starts anywhere else computes a DIFFERENT
+// The firmware's own sleep sessions. hr_read_night anchors the ranking
+// population at the MERGED onset and drops the awake gaps between sessions, so a
+// replay that starts anywhere else, or keeps those minutes, computes a DIFFERENT
 // baseline and trigger level -- it would look like a faithful reproduction and
 // silently disagree with what the watch actually decided.
-static time_t s_onset;
+static SleepSpan s_spans[SE_MAX_SESSIONS];
+static int s_nspans;
+static SleepSpan s_gaps[SE_MAX_SESSIONS];
+static int s_ngaps;
 
-static bool prv_dbg_onset_cb(HealthActivity activity, time_t time_start,
-                             time_t time_end, void *context) {
-  if (activity == HealthActivitySleep) {
-    s_onset = time_start;
-    return false;   // newest-first: the first hit is the current session
+static bool prv_dbg_span_cb(HealthActivity activity, time_t time_start,
+                            time_t time_end, void *context) {
+  if (activity == HealthActivitySleep && s_nspans < SE_MAX_SESSIONS) {
+    s_spans[s_nspans].start = (uint32_t)time_start;
+    s_spans[s_nspans].end = (uint32_t)time_end;
+    s_nspans++;
   }
-  return true;
+  return s_nspans < SE_MAX_SESSIONS;
 }
 
+// Merged onset, exactly as hr_read_night computes it. Leaves the raw sessions in
+// s_spans and the awake gaps in s_gaps for the caller to log and apply.
 static time_t prv_session_onset(time_t now) {
-  s_onset = 0;
+  s_nspans = 0;
+  s_ngaps = 0;
   health_service_activities_iterate(HealthActivitySleep, now - 20 * SECONDS_PER_HOUR,
                                     now, HealthIterationDirectionPast,
-                                    prv_dbg_onset_cb, NULL);
-  return s_onset;
+                                    prv_dbg_span_cb, NULL);
+  return (time_t)se_merge_sessions(s_spans, s_nspans, SE_SESSION_MERGE_GAP_S,
+                                   s_gaps, SE_MAX_SESSIONS, &s_ngaps);
 }
 
 // Chunked read of an explicit UTC range. Deliberately a copy of
@@ -311,13 +320,29 @@ static void prv_dump_eval(void) {
                         : 0, b, sizeof b),
           (unsigned long)r.acc, (int)r.insufficient_data);
 
-  // The same evaluation ANCHORED AT THE SLEEP SESSION, which is what
-  // hr_read_night feeds se_evaluate in the real run. Different population start
-  // -> different baseline and trigger level, so this is the line to compare
-  // against the night summary, not the one above.
+  // The same evaluation ANCHORED AT THE MERGED SLEEP ONSET, with the awake gaps
+  // dropped -- which is what hr_read_night feeds se_evaluate in the real run.
+  // Different population start -> different baseline and trigger level, so this
+  // is the line to compare against the night summary, not the one above.
   time_t onset = prv_session_onset(time(NULL));
-  APP_LOG(APP_LOG_LEVEL_INFO, "DBG onset session=%s",
-          prv_fmt_t(onset, a, sizeof a));
+  APP_LOG(APP_LOG_LEVEL_INFO, "DBG onset merged=%s newest=%s sessions=%d gaps=%d",
+          prv_fmt_t(onset, a, sizeof a),
+          prv_fmt_t(s_nspans > 0 ? (time_t)s_spans[0].start : 0, b, sizeof b),
+          s_nspans, s_ngaps);
+  for (int i = 0; i < s_nspans; i++) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "DBG sess%d %s -> %s", i,
+            prv_fmt_t((time_t)s_spans[i].start, a, sizeof a),
+            prv_fmt_t((time_t)s_spans[i].end, b, sizeof b));
+  }
+  // Applied to s_hist, so the replay below and the h### lines that follow both
+  // show what the algorithm actually saw. The history dump prints an excluded
+  // minute's vmc with a leading '!' rather than hiding it, so nothing is lost.
+  for (int i = 0; i < s_ngaps; i++) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "DBG awake%d %s -> %s (excluded)", i,
+            prv_fmt_t((time_t)s_gaps[i].start, a, sizeof a),
+            prv_fmt_t((time_t)s_gaps[i].end, b, sizeof b));
+  }
+  se_mark_awake(s_hist, s_hist_n, (uint32_t)s_hist_first, s_gaps, s_ngaps);
   if (onset > s_hist_first
       && (int)((onset - s_hist_first) / SECONDS_PER_MINUTE) < s_win_idx) {
     int off = (int)((onset - s_hist_first) / SECONDS_PER_MINUTE);
@@ -349,22 +374,24 @@ static void prv_dump_eval(void) {
   }
 }
 
-// vmc.orientation pairs, 'x' for an invalid minute. The index is the minute
-// offset from `first`, so a gap in the log is visible as a jump in the index.
+// vmc.orientation pairs, prefixed '!' for a minute excluded from the population
+// (either the firmware reported it invalid, or it fell in an awake gap between
+// sleep sessions). The index is the minute offset from `first`, so a gap in the
+// log is visible as a jump in the index.
+//
+// The excluded minutes still print their vmc: this dump exists to make a night
+// reconstructible afterwards, and the values inside a wake episode are exactly
+// what says whether the exclusion caught the right minutes.
 static void prv_dump_hist_line(int i) {
-  char line[112];
+  char line[128];
   int p = snprintf(line, sizeof line, "DBG h%03d", i);
   for (int k = 0; k < DBG_SAMPLES_PER_LINE && i + k < s_hist_n; k++) {
     if (p >= (int)sizeof line) {
       break;
     }
     const SleepMinute *s = &s_hist[i + k];
-    if (s->is_invalid) {
-      p += snprintf(line + p, sizeof line - p, " x");
-    } else {
-      p += snprintf(line + p, sizeof line - p, " %u.%02x", (unsigned)s->vmc,
-                    (unsigned)s->orientation);
-    }
+    p += snprintf(line + p, sizeof line - p, " %s%u.%02x", s->is_invalid ? "!" : "",
+                  (unsigned)s->vmc, (unsigned)s->orientation);
   }
   APP_LOG(APP_LOG_LEVEL_INFO, "%s", line);
 }

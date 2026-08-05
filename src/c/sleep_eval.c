@@ -35,6 +35,69 @@ void se_default_cfg(SleepEvalCfg *out, uint8_t percentile, uint8_t required_minu
   out->orient_step = 2;
 }
 
+uint32_t se_merge_sessions(const SleepSpan *spans, int n, uint32_t max_gap_s,
+                           SleepSpan *gaps, int max_gaps, int *n_gaps) {
+  if (n_gaps != NULL) {
+    *n_gaps = 0;
+  }
+  if (spans == NULL || n <= 0) {
+    return 0;
+  }
+  uint32_t onset = spans[0].start;
+  for (int i = 1; i < n; i++) {
+    if (spans[i].end <= spans[i].start) {
+      continue;   // malformed span: ignore rather than let it end the night
+    }
+    if (spans[i].end >= onset) {
+      // Overlapping or adjacent with no gap at all (also the defensive case of
+      // spans that are not strictly newest-first): absorb it, no awake stretch.
+      if (spans[i].start < onset) {
+        onset = spans[i].start;
+      }
+      continue;
+    }
+    uint32_t gap = onset - spans[i].end;
+    if (gap > max_gap_s) {
+      break;   // a real break between two nights (or a nap): stop here
+    }
+    // The gap MUST be reportable before merging across it. Merging while
+    // dropping the gap on the floor would pull the awake minutes into the
+    // ranking population -- the exact contamination this exists to prevent --
+    // so a full gaps[] ends the night instead.
+    if (gaps == NULL || n_gaps == NULL || *n_gaps >= max_gaps) {
+      break;
+    }
+    gaps[*n_gaps].start = spans[i].end;
+    gaps[*n_gaps].end = onset;
+    (*n_gaps)++;
+    onset = spans[i].start;
+  }
+  return onset;
+}
+
+void se_mark_awake(SleepMinute *samples, int count, uint32_t first_utc,
+                   const SleepSpan *gaps, int n_gaps) {
+  if (samples == NULL || gaps == NULL || count <= 0) {
+    return;
+  }
+  for (int gi = 0; gi < n_gaps; gi++) {
+    uint32_t gs = gaps[gi].start, ge = gaps[gi].end;
+    if (ge <= gs) {
+      continue;
+    }
+    // A plain scan rather than index arithmetic: count is at most SE_MAX_SAMPLES
+    // and n_gaps at most SE_MAX_SESSIONS, so this is a few thousand comparisons
+    // once per evaluation, and it has no unsigned-underflow edge for a gap that
+    // starts before first_utc (which the capped read makes ordinary).
+    for (int i = 0; i < count; i++) {
+      uint32_t ms = first_utc + (uint32_t)i * 60u;
+      if (ms < ge && ms + 60u > gs) {
+        samples[i].is_invalid = true;
+      }
+    }
+  }
+}
+
 // Sorting scratch. Static, not a local: 720 uint16 is 1440 bytes and the Pebble
 // app stack is only about 2 KB. The event loop is single-threaded so a
 // non-reentrant buffer is safe.

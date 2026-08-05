@@ -50,6 +50,67 @@ typedef struct {
 // Fill *out with the standard configuration for a given sensitivity.
 void se_default_cfg(SleepEvalCfg *out, uint8_t percentile, uint8_t required_minutes);
 
+// ---------------------------------------------------------------- sleep spans
+//
+// One sleep session as the firmware reports it, in epoch seconds. Deliberately
+// uint32_t rather than time_t: that keeps this header free of the
+// pebble.h/time.h seam the SDK forces on anything touching struct tm (the SDK
+// ships no <time.h> at all), so both the module and its host tests stay
+// #ifdef-free.
+typedef struct {
+  uint32_t start;
+  uint32_t end;
+} SleepSpan;
+
+// The most sleep sessions one night is expected to produce. A night with more
+// arousals than this simply stops merging at the limit.
+#define SE_MAX_SESSIONS 8
+// Two sessions this far apart or closer are the same night with a wake episode
+// between them, not two separate sleeps. Measured need: the firmware ends the
+// session at every night waking, so a 05:07-05:19 trip to the toilet made the
+// "current session" start at 05:20 and the ranking population 130 minutes
+// instead of the whole night (recorded night of 2026-08-05). Merging generously
+// is safe BECAUSE the gap minutes are then excluded outright by
+// se_mark_awake -- an over-long merge costs nothing, whereas failing to merge
+// shrinks the population, and below SE_MIN_USABLE the smart alarm stands down
+// altogether.
+#define SE_SESSION_MERGE_GAP_S (90u * 60u)
+
+// Merge sleep sessions belonging to the same night and report the awake
+// stretches between them.
+//
+// `spans` is NEWEST-FIRST, exactly as health_service_activities_iterate
+// delivers with HealthIterationDirectionPast. Walking from the newest session
+// backwards, an older session is taken to belong to the same night when the
+// gap to what has been merged so far is at most `max_gap_s`; the first larger
+// gap ends the night.
+//
+// Returns the merged onset (the oldest merged session's start), or 0 when there
+// is nothing to merge. Every gap merged ACROSS is appended to gaps[] and
+// *n_gaps -- the caller must feed those to se_mark_awake, or the awake minutes
+// it just pulled into the population would set the trigger level. Merging
+// therefore STOPS when gaps[] is full rather than merging across a gap it
+// cannot report.
+uint32_t se_merge_sessions(const SleepSpan *spans, int n, uint32_t max_gap_s,
+                           SleepSpan *gaps, int max_gaps, int *n_gaps);
+
+// Mark every minute overlapping one of `gaps` invalid, so the ranking
+// population excludes it. `first_utc` is the timestamp of samples[0].
+//
+// This is the reliable way to keep a night waking out of the population: the
+// firmware ENDING a sleep session is direct evidence of being awake, whereas
+// se_evaluate's own wake-episode exclusion has to infer it from run length and
+// cannot see arousals whose movement is intermittent (measured on the recorded
+// night of 2026-08-05: the longest contiguous elevated run inside a 12-minute
+// trip to the toilet was 2 minutes, far below SE_WAKE_RUN_MINUTES, because the
+// per-minute vmc drops back to 0 between steps).
+//
+// A minute is marked when it OVERLAPS the gap at all, not only when it starts
+// inside it: at worst that excludes one extra minute at each edge, which is the
+// harmless direction.
+void se_mark_awake(SleepMinute *samples, int count, uint32_t first_utc,
+                   const SleepSpan *gaps, int n_gaps);
+
 // Decide whether to ring now.
 //
 // samples[0..count) is the night from sleep onset onwards, oldest first.

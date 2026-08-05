@@ -9,26 +9,48 @@
 #define HR_CHUNK 60
 static HealthMinuteData s_chunk[HR_CHUNK];
 
-// Start of the current sleep session, or 0 if the firmware does not report one.
-// The firmware needs 60 minutes of sleep before a session exists, so this is
-// unavailable early in the night — se_find_onset covers that case.
-static time_t s_onset;
+// Every sleep session the firmware reports for the last 20 h, newest first, and
+// the awake stretches between the ones that belong to the same night.
+//
+// It is NOT enough to take the newest session's start: the firmware ENDS the
+// session at every night waking, so a trip to the toilet at 05:07 makes the
+// "current session" start at 05:20 and the ranking population the ~2 h since,
+// instead of the whole night (measured on the recorded night of 2026-08-05,
+// which tests/fixtures/night_2026_08_05.h replays). The closer to the alarm
+// that waking is, the thinner the population, and below SE_MIN_USABLE the smart
+// alarm stands down for the entire window.
+static SleepSpan s_spans[SE_MAX_SESSIONS];
+static int s_nspans;
+static SleepSpan s_gaps[SE_MAX_SESSIONS];
+static int s_ngaps;
 
-static bool prv_onset_cb(HealthActivity activity, time_t time_start, time_t time_end,
-                         void *context) {
-  if (activity == HealthActivitySleep) {
-    s_onset = time_start;
-    return false;   // the iteration is newest-first; the first hit is the current one
+static bool prv_span_cb(HealthActivity activity, time_t time_start, time_t time_end,
+                        void *context) {
+  if (activity == HealthActivitySleep && s_nspans < SE_MAX_SESSIONS) {
+    s_spans[s_nspans].start = (uint32_t)time_start;
+    s_spans[s_nspans].end = (uint32_t)time_end;
+    s_nspans++;
   }
-  return true;
+  return s_nspans < SE_MAX_SESSIONS;   // stop iterating once the array is full
 }
 
+// Onset of the night, sessions merged across short wakings, or 0 if the
+// firmware reports no session at all. It needs 60 minutes of sleep before a
+// session exists, so this is unavailable early in the night — se_find_onset
+// covers that case.
 static time_t prv_session_onset(time_t now) {
-  s_onset = 0;
+  s_nspans = 0;
+  s_ngaps = 0;
   health_service_activities_iterate(HealthActivitySleep, now - 20 * SECONDS_PER_HOUR,
                                     now, HealthIterationDirectionPast,
-                                    prv_onset_cb, NULL);
-  return s_onset;
+                                    prv_span_cb, NULL);
+  uint32_t onset = se_merge_sessions(s_spans, s_nspans, SE_SESSION_MERGE_GAP_S,
+                                     s_gaps, SE_MAX_SESSIONS, &s_ngaps);
+  if (s_nspans > 1) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "SLEEP %d sessions, merged onset=%lu, %d awake gap(s)",
+            s_nspans, (unsigned long)onset, s_ngaps);
+  }
+  return (time_t)onset;
 }
 
 HistoryRead hr_read_night(SleepMinute *out, int max, time_t window_start_utc) {
@@ -88,6 +110,15 @@ HistoryRead hr_read_night(SleepMinute *out, int max, time_t window_start_utc) {
     return hr;
   }
   hr.available = true;
+
+  // Drop the minutes the firmware itself says were spent awake (the gaps merged
+  // across above), BEFORE anything reads them. se_evaluate's own wake-episode
+  // exclusion cannot catch these: it infers arousals from run length, and on
+  // this watch the per-minute vmc falls back to 0 between movements, so a
+  // 13-minute trip to the toilet is a handful of 1-2 minute runs, far below
+  // SE_WAKE_RUN_MINUTES. Left in, they sit in the night's top decile and raise
+  // the trigger level (measured: 414 -> 616 on the recorded night).
+  se_mark_awake(out, hr.count, (uint32_t)hr.first_utc, s_gaps, s_ngaps);
 
   if (window_start_utc > hr.first_utc) {
     int idx = (int)((window_start_utc - hr.first_utc) / SECONDS_PER_MINUTE);
