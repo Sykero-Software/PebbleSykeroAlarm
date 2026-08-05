@@ -629,12 +629,33 @@ static AcWindowDecision prv_window_wakeup(
     // so it never reaches this branch at all and falls through to AC_WIN_OPEN
     // below, which is how the day's alarm survives a mid-window config change.
     //
-    // Nothing is lost by not ringing here: the caller re-arms, and a deadline is
-    // armed in its own right (sc_rearm's priority 1) the moment the config
-    // changes. A deadline missed by more than the served tolerance does not ring
-    // on the WC_DEADLINE path either -- ac_dispatch_wakeup requires it inside
-    // +/- AC_SERVED_TOLERANCE_S -- so this is that same rule, applied to a path
-    // that could otherwise reach back hours.
+    // The refused occurrence is DROPPED, not re-armed. sc_rearm's priority-1 pick
+    // (ac_next_alarm_unserved, search base `now`) only ever returns a FUTURE
+    // occurrence, so what actually gets armed the moment the config changes is the
+    // NEXT occurrence -- typically tomorrow's, not this one. Losing it is still the
+    // right trade: this branch is reachable only from a phone-side config save or
+    // alarm-set edit made WHILE AWAKE, because the other two paths that can
+    // discard a cycle -- the nightly DST recheck and ac_prune_spent_one_time --
+    // either leave the basis in the future or leave no occurrence at all (the
+    // `!live && basis == 0` return above). The user editing an alarm at the phone
+    // is what makes dropping the stale occurrence acceptable rather than a missed
+    // wake-up. Ringing instead is what the old code did, and it rang a full
+    // escalating alarm for an alarm time the user had just moved into the past --
+    // exactly the case above (07:30 edited from 07:50, ten minutes after the fact).
+    //
+    // A deadline missed by more than the served tolerance does not ring on the
+    // WC_DEADLINE path either -- ac_dispatch_wakeup requires it inside +/-
+    // AC_SERVED_TOLERANCE_S -- so this is that same rule, applied to a path that
+    // could otherwise reach back hours.
+    //
+    // Worth stating plainly: ac_ring_deadline never returns a ring EARLIER than
+    // its basis under RING_LATEST or RING_FROM (ring == basis for RING_LATEST;
+    // ring == basis + the window for RING_FROM), so `basis > now` and `now >=
+    // ring` cannot hold together in those two modes -- AC_WIN_RING_NOW is
+    // therefore UNREACHABLE on this discarded path under RING_LATEST/RING_FROM.
+    // It is reachable only under SEMANTICS_AWAKE_BY, where ring = basis -
+    // full_dev_s can sit behind `now` while the occurrence itself (basis) is still
+    // ahead -- case 9b in the test file is exactly that.
     //
     // ONLY on the discarded path, and `discarded` is the test rather than `!live`:
     // a wakeup arriving with NO live cycle derives its basis from `now - 60`, so
