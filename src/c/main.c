@@ -176,6 +176,17 @@ static void fmt_delta(time_t when, time_t now, char *out, size_t n) {
   }
 }
 
+// The slot whose snooze is in flight, or -1. Bounded against s_count, because
+// pending_slot can outlive the alarm it names -- the phone can delete a slot
+// while a snooze is pending.
+static int snoozed_slot(void) {
+  if (!ac_snooze_pending(s_rs.snooze_count, s_rs.ring_started_at, time(NULL))) {
+    return -1;
+  }
+  int slot = s_rs.pending_slot;
+  return (slot >= 0 && slot < s_count) ? slot : -1;
+}
+
 static void refresh_list(void) {
   if (s_list_menu) {
     menu_layer_reload_data(s_list_menu);
@@ -463,14 +474,23 @@ static void list_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
   // pending skip (ac_next_occurrence honours skip_next), so the row used to be
   // correct and unexplained: the number jumped a day and only a corner marker
   // said why.
-  if (!a->enabled) {
-    snprintf(state, sizeof(state), "off");
-  } else if (a->skip_next) {
-    snprintf(state, sizeof(state), "skip, in %s", delta);
+  if ((int)ci->row == snoozed_slot()) {
+    // A snoozed alarm's own row must say so. Its occurrence is already stamped
+    // served, so the ordinary path below would show TOMORROW's time while the
+    // alarm is minutes away from ringing again. The weekday letters are dropped
+    // for this one row: "MTWTF--  snoozed, in 8 min" clips on a 144 px board.
+    fmt_delta((time_t)s_rs.ring_started_at, time(NULL), delta, sizeof(delta));
+    snprintf(sub, sizeof(sub), "snoozed, in %s", delta);
   } else {
-    snprintf(state, sizeof(state), "in %s", delta);
+    if (!a->enabled) {
+      snprintf(state, sizeof(state), "off");
+    } else if (a->skip_next) {
+      snprintf(state, sizeof(state), "skip, in %s", delta);
+    } else {
+      snprintf(state, sizeof(state), "in %s", delta);
+    }
+    snprintf(sub, sizeof(sub), "%s  %s", days, state);
   }
-  snprintf(sub, sizeof(sub), "%s  %s", days, state);
   graphics_draw_text(gctx, sub, fonts_get_system_font(FONT_KEY_GOTHIC_18),
       GRect(4, 20, b.size.w - 8, 22), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
 }
@@ -841,11 +861,18 @@ static void main_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
       int slot = ac_next_alarm_unserved(
           s_alarms, s_count, nw, (int)s_rs.served_slot, (time_t)s_rs.served_at,
           (int32_t)(nw - sc_ring_deadline(&s_cfg, nw)), &when);
-      if (slot < 0) {
+      int snz = snoozed_slot();
+      if (snz >= 0) {
+        // Ahead of "next in ...": the alarm minutes away matters more than the
+        // one tomorrow, and this row is the whole main menu's status line.
+        char delta[16];
+        fmt_delta((time_t)s_rs.ring_started_at, nw, delta, sizeof(delta));
+        snprintf(sub, sizeof(sub), "snoozed, in %s", delta);
+      } else if (slot < 0) {
         snprintf(sub, sizeof(sub), "none set");
       } else {
         char delta[16];
-        fmt_delta(when, time(NULL), delta, sizeof(delta));
+        fmt_delta(when, nw, delta, sizeof(delta));
         snprintf(sub, sizeof(sub), "next in %s", delta);
       }
       menu_cell_basic_draw(gctx, cell, "Alarms", sub, NULL);
