@@ -114,10 +114,15 @@ HistoryRead hr_read_night(SleepMinute *out, int max, time_t window_start_utc) {
   // Drop the minutes the firmware itself says were spent awake (the gaps merged
   // across above), BEFORE anything reads them. se_evaluate's own wake-episode
   // exclusion cannot catch these: it infers arousals from run length, and on
-  // this watch the per-minute vmc falls back to 0 between movements, so a
-  // 13-minute trip to the toilet is a handful of 1-2 minute runs, far below
-  // SE_WAKE_RUN_MINUTES. Left in, they sit in the night's top decile and raise
-  // the trigger level (measured: 414 -> 616 on the recorded night).
+  // this watch the per-minute vmc falls back to 0 between movements, so a trip to
+  // the toilet is a handful of 1-2 minute runs, far below SE_WAKE_RUN_MINUTES.
+  // Left in, they sit in the night's top decile and raise the trigger level
+  // (measured on the recorded night: 674 -> 616).
+  //
+  // Only the minutes the firmware calls awake, which is LESS than the arousal:
+  // on that night the session ended at 05:14 though the movement began at 05:07,
+  // so four sizeable spikes stayed in the population. Excluding the whole trip
+  // would have given 471. The residual is on the backlog, not silently ignored.
   se_mark_awake(out, hr.count, (uint32_t)hr.first_utc, s_gaps, s_ngaps);
 
   if (window_start_utc > hr.first_utc) {

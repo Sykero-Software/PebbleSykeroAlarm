@@ -10,14 +10,24 @@
 // Why a recorded night and not another synthetic one: this night is what
 // revealed BOTH defects the session-merging code fixes, and neither is
 // reproducible from the synthetic generators in test_sleep_eval.c.
-//   1. The firmware ended the sleep session at a 05:07-05:19 trip to the
-//      toilet and started a new one at 05:20, so hr_read_night anchored the
-//      ranking population there: 130 minutes instead of the whole night.
+//   1. The firmware ended the sleep session at a trip to the toilet and started
+//      a new one at 05:20, so hr_read_night anchored the ranking population
+//      there: 130 minutes instead of the whole night (P90 level 525, and a
+//      population that thin swings the level 392 <-> 955 on a one-minute
+//      anchor shift).
 //   2. This watch's vmc drops back to 0 between movements, so the trip's
 //      longest contiguous run above 4 x median + margin is 2 MINUTES --
 //      se_evaluate's own >= 8-minute wake-episode exclusion cannot see it, and
-//      the trip's spikes (up to 7950) stayed in the population and raised the
-//      P90 trigger level from 414 to 616.
+//      the trip's spikes (up to 7950) stay in the population.
+//
+// The sessions below are the REAL ones the watch reported, and they carry a fact
+// worth more than the fixture itself: the session ENDED AT 05:14, seven minutes
+// AFTER the movement started at 05:07. The firmware keeps the beginning of an
+// arousal inside the sleep session, so se_mark_awake can only exclude 05:14-05:19
+// (level 674 -> 616), while 963/674/1207/3785 at 05:07-05:12 stay in the
+// population; excluding the whole trip would give 471. Do NOT assume a session
+// boundary coincides with the first movement -- an earlier version of this
+// fixture guessed 05:07 and produced a level (414) that the watch never computed.
 // The night's median vmc is 0, which is also nothing like the synthetic nights.
 #pragma once
 #include "sleep_eval.h"
@@ -160,15 +170,21 @@ static int night_0805_idx(int hour, int min) {
 }
 
 // The two sleep sessions the firmware reported, NEWEST FIRST (as
-// health_service_activities_iterate delivers them). The newer one starts at
-// 05:20 -- the value the watch's own dump logged as `DBG onset session=08-05
-// 05:20`. The older one's end is the 05:07 minute the trip begins at; its start
-// is 23:12, a plausible bedtime for this night's data (the exact value does not
-// matter to the tests, only that it is well before the window).
+// health_service_activities_iterate delivers them), transcribed verbatim from the
+// watch's own dump run against this night with the merging build:
+//
+//   DBG onset merged=08-04 23:50 newest=08-05 05:20 sessions=2 gaps=1
+//   DBG sess0 08-05 05:20 -> 08-05 07:56
+//   DBG sess1 08-04 23:50 -> 08-05 05:14
+//   DBG awake0 08-05 05:14 -> 08-05 05:20 (excluded)
+//   DBG evalonset off=120 base=0 lvl=616 fire=1 fidx=486 at=08-05 07:56
+//
+// The host replay reproduces that lvl=616 and that 07:56 exactly, which is what
+// makes this fixture a check on the real chain rather than on itself.
 #define NIGHT_0805_SPANS(name) \
   const SleepSpan name[2] = { \
     { NIGHT_0805_FIRST_UTC + (uint32_t)night_0805_idx(5, 20) * 60u, \
-      NIGHT_0805_FIRST_UTC + (uint32_t)night_0805_idx(8, 29) * 60u }, \
-    { NIGHT_0805_FIRST_UTC + (uint32_t)night_0805_idx(23, 12) * 60u, \
-      NIGHT_0805_FIRST_UTC + (uint32_t)night_0805_idx(5, 7) * 60u }, \
+      NIGHT_0805_FIRST_UTC + (uint32_t)night_0805_idx(7, 56) * 60u }, \
+    { NIGHT_0805_FIRST_UTC + (uint32_t)night_0805_idx(23, 50) * 60u, \
+      NIGHT_0805_FIRST_UTC + (uint32_t)night_0805_idx(5, 14) * 60u }, \
   }

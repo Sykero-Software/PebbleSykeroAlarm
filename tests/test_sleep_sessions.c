@@ -279,38 +279,51 @@ int main(void) {
     printf("  recorded night, as it happened: lvl=%u fired 07:56\n", r.trigger_level);
   }
   {
-    // The trip's movement is TOO INTERMITTENT for the run-length wake-episode
-    // exclusion: the longest contiguous run above 4 x baseline + margin inside
-    // it is 2 minutes, so se_evaluate cannot exclude it and the trip's spikes
-    // (up to 7950) raise the trigger level. This is the measurement that says
-    // se_mark_awake is needed and SE_WAKE_RUN_MINUTES is not enough.
+    // What the exclusion is worth, and what it CANNOT reach. The firmware ended
+    // the session at 05:14 while the movement started at 05:07, so se_mark_awake
+    // gets 6 minutes: 674 -> 616. The 7 minutes it cannot touch hold 963, 674,
+    // 1207 and 3785 -- and the run-length wake-episode exclusion cannot take them
+    // either, because this watch's vmc returns to 0 between movements and the
+    // longest contiguous elevated run inside the trip is 2 minutes. Excluding the
+    // whole trip would give 471, which is the size of the residual and the reason
+    // SE_WAKE_RUN_MINUTES stays on the open list.
+    const int anchor = night_0805_idx(23, 50);
     night_0805_load(g_s);
-    int anchor = night_0805_idx(23, 0);
     SleepEvalResult with_trip = eval_from(anchor, WIN, 90, 2, NIGHT_0805_LEN);
-    // Same anchor, but the trip excluded the way se_mark_awake excludes it.
+    night_0805_load(g_s);
+    for (int i = night_0805_idx(5, 14); i < night_0805_idx(5, 20); i++) {
+      g_s[i].is_invalid = true;
+    }
+    SleepEvalResult without = eval_from(anchor, WIN, 90, 2, NIGHT_0805_LEN);
     night_0805_load(g_s);
     for (int i = night_0805_idx(5, 7); i < night_0805_idx(5, 20); i++) {
       g_s[i].is_invalid = true;
     }
-    SleepEvalResult without = eval_from(anchor, WIN, 90, 2, NIGHT_0805_LEN);
-    printf("  trip in the population: lvl=%u -> excluded: lvl=%u\n",
-           with_trip.trigger_level, without.trigger_level);
-    assert(with_trip.trigger_level > without.trigger_level);
-    assert(without.trigger_level == 414);
+    SleepEvalResult ideal = eval_from(anchor, WIN, 90, 2, NIGHT_0805_LEN);
+    printf("  merged population: lvl=%u -> real gap excluded: lvl=%u"
+           " (whole trip would be %u)\n",
+           with_trip.trigger_level, without.trigger_level, ideal.trigger_level);
+    assert(with_trip.trigger_level == 674);
+    assert(without.trigger_level == 616);
+    assert(ideal.trigger_level == 471);
   }
   {
     // The chain: merge the two reported sessions, mark the gap awake, evaluate.
-    // The onset comes back at the REAL bedtime, not 05:20, and the trip minutes
-    // no longer set the level -- while the ring lands on the same minute as it
-    // really did, because it was a genuine turn-over (two consecutive
-    // orientation changes, acc = 2 x orient_bonus), not a threshold crossing.
+    // The onset comes back at the REAL bedtime (23:50) instead of 05:20, so the
+    // level is taken from ~470 minutes rather than 130 -- and the ring lands on
+    // the same minute as it really did, because it was a genuine turn-over (two
+    // consecutive orientation changes, acc = 2 x orient_bonus), not a threshold
+    // crossing. lvl=616 and 07:56 are what the watch itself logged for this night
+    // (`DBG evalonset off=120 base=0 lvl=616 ... at=08-05 07:56`), so this asserts
+    // agreement with hardware, not with the algorithm's own opinion.
     int onset_idx = -1;
     SleepEvalResult r = chain(NIGHT_0805_LEN, 90, 2, &onset_idx);
-    assert(onset_idx == night_0805_idx(23, 12));
+    assert(onset_idx == night_0805_idx(23, 50));
     assert(!r.insufficient_data);
-    assert(r.trigger_level == 414);
+    assert(r.trigger_level == 616);
     assert(r.fire && onset_idx + r.fired_index == night_0805_idx(7, 56));
-    printf("  merged chain: onset 23:12, lvl=%u, fired 07:56\n", r.trigger_level);
+    printf("  merged chain: onset 23:50, lvl=%u, fired 07:56 (matches the watch)\n",
+           r.trigger_level);
   }
   {
     // The defect that actually costs the user the alarm: WITHOUT merging, a
