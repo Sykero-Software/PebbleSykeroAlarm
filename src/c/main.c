@@ -2252,6 +2252,35 @@ int main(void) {
     }
   }
 
+  // An ORPHANED CYCLE: the alarm that owned the live cycle is gone, so
+  // pending_slot is -1 while window_started_at still says a smart window is
+  // open. Only the prune above can produce that state (every path that opens a
+  // window sets a real slot), and it is exactly what the built-in Test alarm
+  // leaves behind: the test alarm opens a window, gets auto-disabled, and is
+  // pruned on the next launch -- taking its own slot reference with it.
+  //
+  // Left standing, the orphan is not inert. sc_rearm keeps re-arming the rolling
+  // WC_REENTRY (it is armed on window_started_at != 0 alone) so the app is woken
+  // every SC_REENTRY_GAP_S for the rest of time, and the WC_WINDOW/WC_REENTRY
+  // handler trusts the STORED deadline whenever a window is live -- a deadline
+  // belonging to the deleted alarm. Once that instant passes, the next re-entry
+  // reads `now >= ring` and rings a full escalating alarm for an occurrence the
+  // user never set. Observed on the real watch 2026-08-05: a 13:52 test alarm
+  // left window=13:52/deadline=14:22 with pending_slot=-1, which would have rung
+  // at ~14:22 that afternoon.
+  //
+  // Ending the cycle here is the whole fix: it runs BEFORE the launch sc_rearm
+  // below, so no re-entry is placed and the stale deadline can never be read.
+  if (s_rs.window_started_at != 0 && s_rs.pending_slot < 0) {
+    APP_LOG(APP_LOG_LEVEL_WARNING,
+            "orphaned cycle at launch (window=%lu deadline=%lu, no owning alarm)"
+            " -- ending it",
+            (unsigned long)s_rs.window_started_at,
+            (unsigned long)s_rs.deadline_at);
+    runstate_end_cycle();
+    as_save_runstate(&s_rs);
+  }
+
   // Captures the same launch-wakeup data the pre-existing log line reported
   // (Task 6), plus the cookie itself so it can be dispatched to start_ring below
   // once the main window exists — a single read of the launch event instead of
