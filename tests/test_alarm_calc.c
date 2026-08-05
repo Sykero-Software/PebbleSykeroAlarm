@@ -19,6 +19,37 @@ static time_t at(int year, int mon, int day, int hour, int min) {
   return mktime(&tm);
 }
 
+// One ac_window_wakeup scenario's inputs, so a case below reads as the STATE it
+// describes rather than as fourteen positional arguments -- and so that adding an
+// input later does not touch every case. Anything left out defaults to 0/NULL,
+// which for the five RunState cycle fields means "no cycle"; `pending_slot` and
+// `served_slot` are written out in every case, because 0 is a real slot there and
+// -1 is the "none" both need.
+typedef struct {
+  const Alarm *alarms;
+  int      count;
+  time_t   now;
+  uint8_t  semantics;
+  bool     smart_window_active;
+  uint16_t window_min;
+  uint32_t full_dev_s;
+  int8_t   pending_slot;
+  time_t   window_started_at;
+  time_t   ring_started_at;
+  uint8_t  snooze_count;
+  time_t   deadline_at;
+  int      served_slot;
+  time_t   served_at;
+} WinCase;
+
+static AcWindowDecision win_decide(const WinCase *c) {
+  return ac_window_wakeup(c->alarms, c->count, c->now, c->semantics,
+                          c->smart_window_active, c->window_min, c->full_dev_s,
+                          c->pending_slot, (uint32_t)c->window_started_at,
+                          (uint32_t)c->ring_started_at, c->snooze_count,
+                          (uint32_t)c->deadline_at, c->served_slot, c->served_at);
+}
+
 static void show(const char *label, time_t t) {
   struct tm *tm = localtime(&t);
   printf("  %-28s %04d-%02d-%02d %02d:%02d\n", label,
@@ -807,6 +838,330 @@ int main(void) {
       forced.enabled = true;
       assert(ac_next_occurrence(&forced, win_start_today - 1) != 0);   // the trap
       assert(ac_next_occurrence(&deleted_row, win_start_today - 1) == 0);
+    }
+  }
+
+  // --- ac_window_wakeup: THE DECISION a WC_WINDOW / WC_REENTRY wakeup makes ---
+  //
+  // This block exists because the six defects found in that handler over two
+  // rounds this week were all in main.c, where no test can reach them -- and the
+  // assertions written alongside those fixes (the ac_cycle_is_stale and
+  // ac_window_start cases above) passed identically against the buggy handler,
+  // because they only exercised the arithmetic it happened to call. Each case
+  // below is one of those defects, asserted on the DECISION, and each fails if the
+  // corresponding bug comes back.
+  //
+  // Times are Europe/Helsinki (set at the top of main), Wed 2026-08-05 unless
+  // stated. `full_dev_s` is 0 except in the SEMANTICS_AWAKE_BY cases, which pass a
+  // fixed 1800 s (30 min) ramp -- 1200 s where a profile change is being modelled.
+  {
+    const Alarm daily = { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x7F,
+                          .enabled = true };
+    const time_t t0750 = at(2026, 8, 5, 7, 50);
+    const time_t t0820 = at(2026, 8, 5, 8, 20);
+
+    // 1. RING_FROM, live window [07:50, 08:20], re-entry at 07:58, config
+    //    unchanged: continue the window from the STORED values, cycle untouched.
+    //
+    //    Locks out: discarding a live RING_FROM window. `when` inside such a
+    //    window is TOMORROW's occurrence (today's 07:50 has passed), so
+    //    validating the stored deadline against it reported stale, ended the
+    //    cycle, and re-armed for tomorrow only -- the whole day's alarm lost.
+    {
+      WinCase c = { .alarms = &daily, .count = 1, .now = at(2026, 8, 5, 7, 58),
+                    .semantics = SEMANTICS_RING_FROM, .smart_window_active = true,
+                    .window_min = 30, .pending_slot = 0,
+                    .window_started_at = t0750, .deadline_at = t0820,
+                    .served_slot = -1 };
+      AcWindowDecision d = win_decide(&c);
+      assert(d.action == AC_WIN_OPEN);
+      assert(d.slot == 0);
+      assert(d.window_start == t0750);      // the STORED window start
+      assert(d.deadline == t0820);          // the STORED deadline
+      assert(!d.end_cycle);
+      assert(!d.abandon_screen);            // never on the open path
+    }
+
+    // 2. The same window, but the smart window length changed 30 -> 20 while it
+    //    was open, so the stored deadline (08:20) is no longer this occurrence's
+    //    (08:10): end the cycle and RE-OPEN THE SAME window under the new config.
+    //
+    //    Locks out: dropping the day's alarm on a mid-window config change. The
+    //    first fix ended the stale cycle and then derived the restart from `when`
+    //    -- tomorrow -- so the alarm never rang today. The restart basis must be
+    //    the cycle's OWN occurrence.
+    {
+      WinCase c = { .alarms = &daily, .count = 1, .now = at(2026, 8, 5, 7, 58),
+                    .semantics = SEMANTICS_RING_FROM, .smart_window_active = true,
+                    .window_min = 20, .pending_slot = 0,
+                    .window_started_at = t0750, .deadline_at = t0820,
+                    .served_slot = -1 };
+      AcWindowDecision d = win_decide(&c);
+      assert(d.end_cycle);                  // the stored deadline was 08:20
+      assert(d.action == AC_WIN_OPEN);
+      assert(d.slot == 0);
+      assert(d.window_start == t0750);
+      assert(d.deadline == at(2026, 8, 5, 8, 10));
+      assert(!d.abandon_screen);            // the same screen is re-captioned
+    }
+
+    // 3. THE ORPHAN THAT STARTED ALL OF THIS. A one-time 13:52 test alarm was
+    //    pruned out from under its own cycle, leaving window=13:52/deadline=14:22
+    //    with pending_slot -1 and only a daily 07:50 alarm in the set. At 13:58 the
+    //    re-entry resolved tomorrow's 07:50, kept the 14:22 deadline, read
+    //    `now >= ring` that afternoon and rang a full escalating alarm nobody set.
+    //
+    //    Locks out: exactly that phantom ring.
+    {
+      WinCase c = { .alarms = &daily, .count = 1, .now = at(2026, 8, 5, 13, 58),
+                    .semantics = SEMANTICS_RING_LATEST, .smart_window_active = true,
+                    .window_min = 30, .pending_slot = -1,
+                    .window_started_at = at(2026, 8, 5, 13, 52),
+                    .deadline_at = at(2026, 8, 5, 14, 22),
+                    .served_slot = -1 };
+      AcWindowDecision d = win_decide(&c);
+      assert(d.action != AC_WIN_RING_NOW);  // THE defect
+      assert(d.action == AC_WIN_REARM_ONLY);
+      assert(d.end_cycle);                  // the leftover must not survive
+      assert(d.abandon_screen);             // ...nor the screen describing it
+      assert(d.deadline == 0);              // nothing derived from 14:22
+    }
+
+    // 4. AN ALARM DELETED ON THE PHONE, mid-window. Deleting a slot shifts the
+    //    survivors down and can leave a DISABLED row in the slot the cycle names
+    //    -- here a spent one-time 22:00 row under a live 07:50/08:20 window. The
+    //    forced staleness probe answers about that row's grid (22:30), which does
+    //    not match the stored deadline, so the cycle is a leftover; and the
+    //    restart basis, read UNFORCED, is 0 -- there is nothing to re-open.
+    //
+    //    Locks out: ringing for an alarm the user deleted. Deriving the restart
+    //    from `when` (0 for a disabled slot) gave an epoch-era ring instant, i.e.
+    //    always <= now, so this path started a full escalating alarm immediately.
+    {
+      const Alarm deleted_row = { .minute_of_day = 22 * 60, .weekday_mask = 0,
+                                  .enabled = false };
+      WinCase c = { .alarms = &deleted_row, .count = 1,
+                    .now = at(2026, 8, 5, 7, 58),
+                    .semantics = SEMANTICS_RING_FROM, .smart_window_active = true,
+                    .window_min = 30, .pending_slot = 0,
+                    .window_started_at = t0750, .deadline_at = t0820,
+                    .served_slot = -1 };
+      AcWindowDecision d = win_decide(&c);
+      assert(d.action == AC_WIN_REARM_ONLY);
+      assert(d.action != AC_WIN_RING_NOW);
+      assert(d.end_cycle);
+      assert(d.abandon_screen);
+      assert(d.deadline == 0);
+    }
+
+    // 4b. THE DELIBERATELY DIFFERENT CASE, asserted so it cannot be "simplified"
+    //     into 4: the SAME alarm merely SWITCHED OFF mid-window. The staleness
+    //     probe forces enabled/skip_next precisely so this asks about the alarm's
+    //     GRID, not its on/off state -- the occurrence still resolves to 07:50 and
+    //     the stored deadline still fits, so the cycle stays live and the window
+    //     continues. That an alarm switched off mid-window still rings is a
+    //     recorded deferral, not an accident.
+    {
+      Alarm switched_off = daily;
+      switched_off.enabled = false;
+      WinCase c = { .alarms = &switched_off, .count = 1,
+                    .now = at(2026, 8, 5, 7, 58),
+                    .semantics = SEMANTICS_RING_FROM, .smart_window_active = true,
+                    .window_min = 30, .pending_slot = 0,
+                    .window_started_at = t0750, .deadline_at = t0820,
+                    .served_slot = -1 };
+      AcWindowDecision d = win_decide(&c);
+      assert(d.action == AC_WIN_OPEN);
+      assert(!d.end_cycle);
+      assert(d.window_start == t0750 && d.deadline == t0820);
+    }
+
+    // 6. pending_slot OUT OF RANGE with a live window -- the phone deleted the
+    //    slots (or all of them) while the window was open. An index that no longer
+    //    names an alarm is no owner, so the cycle must be ended.
+    //
+    //    Locks out: the 180 s wake loop. sc_rearm re-arms the rolling re-entry on
+    //    window_started_at != 0 ALONE, so a live cycle nothing can clear woke the
+    //    app every SC_REENTRY_GAP_S for ever, with the menu advertising an alarm
+    //    that no longer existed.
+    {
+      // 6a. Every alarm deleted: count 0, so there is nothing to resolve at all.
+      WinCase c = { .alarms = &daily, .count = 0, .now = at(2026, 8, 5, 7, 58),
+                    .semantics = SEMANTICS_RING_FROM, .smart_window_active = true,
+                    .window_min = 30, .pending_slot = 0,
+                    .window_started_at = t0750, .deadline_at = t0820,
+                    .served_slot = -1 };
+      AcWindowDecision d = win_decide(&c);
+      assert(d.action == AC_WIN_REARM_ONLY);
+      assert(d.slot == -1);
+      assert(d.end_cycle);
+      assert(d.abandon_screen);
+
+      // 6b. Some alarms left, but the cycle names a slot past the end of the set.
+      c.count = 1;
+      c.pending_slot = 3;
+      d = win_decide(&c);
+      assert(d.action == AC_WIN_REARM_ONLY);
+      assert(d.end_cycle);
+      assert(d.abandon_screen);
+    }
+
+    // 7. A KILLED-RING CYCLE MUST NOT HIJACK THE NEXT ALARM'S WINDOW. A force-quit
+    //    mid-ring leaves ring_started_at set, window_started_at 0 and pending_slot
+    //    on the OLD alarm (0 here), and the launch re-arm drops that cycle's
+    //    keep-alive, so it stays live indefinitely. When alarm 1's own WC_WINDOW
+    //    then arrives, the decision must be about ALARM 1.
+    //
+    //    Locks out: reading pending_slot unconditionally. It made the handler work
+    //    on alarm 0, whose window was still hours away, so it re-armed only -- and
+    //    sc_rearm will not re-place a WC_WINDOW whose start has passed, so alarm
+    //    1's smart window never opened at all that day.
+    {
+      const Alarm two[2] = {
+        { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x7F, .enabled = true },
+        { .minute_of_day = 6 * 60,      .weekday_mask = 0x7F, .enabled = true },
+      };
+      WinCase c = { .alarms = two, .count = 2, .now = at(2026, 8, 5, 5, 35),
+                    .semantics = SEMANTICS_RING_LATEST, .smart_window_active = true,
+                    .window_min = 30, .pending_slot = 0,
+                    .window_started_at = 0,
+                    .ring_started_at = at(2026, 8, 4, 7, 50),   // yesterday's ring
+                    .deadline_at = at(2026, 8, 4, 7, 50),
+                    .served_slot = -1 };
+      AcWindowDecision d = win_decide(&c);
+      assert(d.slot == 1);                  // NOT 0, the killed cycle's slot
+      assert(d.action == AC_WIN_OPEN);
+      assert(d.window_start == at(2026, 8, 5, 5, 30));
+      assert(d.deadline == at(2026, 8, 5, 6, 0));
+      // The killed ring's own cycle is left alone here: only a live WINDOW is
+      // ended by this handler, and a ring cycle may still be resumed.
+      assert(!d.end_cycle);
+    }
+
+    // 8. AN OCCURRENCE THAT HAS ALREADY RUNG IS NEVER RE-OPENED, AND NEVER RUNG
+    //    AGAIN. A smart window can ring at 07:20 for a 07:50 alarm, and then "the
+    //    next occurrence after now" is still today's 07:50: start_ring records the
+    //    served occurrence by its DEADLINE instant, and this reads that record.
+    //    Here a stray window/re-entry wakeup arrives at 07:50:30, seconds past the
+    //    deadline of an occurrence that already rang.
+    //
+    //    Locks out: the double ring that cost the user a 07:20 wake AND a 07:50 one
+    //    on the same morning.
+    {
+      WinCase c = { .alarms = &daily, .count = 1, .now = t0750 + 30,
+                    .semantics = SEMANTICS_RING_LATEST, .smart_window_active = true,
+                    .window_min = 30, .pending_slot = -1,
+                    .served_slot = 0, .served_at = t0750 };
+      AcWindowDecision d = win_decide(&c);
+      assert(d.action == AC_WIN_REARM_ONLY);
+      assert(d.action != AC_WIN_RING_NOW);
+      assert(!d.end_cycle);                 // nothing invalid about the state
+      assert(!d.abandon_screen);
+
+      // Without the served guard this same wakeup DOES ring: the occurrence it
+      // resolves is today's 07:50 and its deadline is already behind `now`.
+      time_t w = 0;
+      assert(ac_next_alarm(&daily, 1, c.now - 60, &w) == 0);
+      assert(w == t0750 && w <= c.now);
+      // ...and with the record cleared, that is exactly what happens.
+      c.served_slot = -1;
+      d = win_decide(&c);
+      assert(d.action == AC_WIN_RING_NOW);
+      assert(d.deadline == t0750);
+    }
+
+    // 9. SEMANTICS_AWAKE_BY RINGS AS SOON AS THE RAMP IS DUE -- an immediate ring
+    //    is legitimate in this mode, because the deadline is the alarm time MINUS
+    //    the escalation's full development (1800 s here), so a deadline already
+    //    behind `now` means the ramp genuinely must already be running.
+    //
+    //    Locks out: over-applying the rule of case 5 below. Note `now` is 07:50
+    //    exactly, so the occurrence this resolves is NOT ahead of `now` -- a gate
+    //    that refused to ring whenever the occurrence had been reached would break
+    //    this legitimate ring.
+    {
+      const uint32_t ramp = 1800;
+      WinCase c = { .alarms = &daily, .count = 1, .now = t0750,
+                    .semantics = SEMANTICS_AWAKE_BY, .smart_window_active = true,
+                    .window_min = 30, .full_dev_s = ramp, .pending_slot = 0,
+                    .window_started_at = at(2026, 8, 5, 6, 50),
+                    .deadline_at = at(2026, 8, 5, 7, 20),
+                    .served_slot = -1 };
+      AcWindowDecision d = win_decide(&c);
+      assert(d.action == AC_WIN_RING_NOW);
+      assert(d.slot == 0);
+      assert(d.deadline == at(2026, 8, 5, 7, 20));
+      assert(!d.end_cycle);
+      assert(!d.abandon_screen);             // start_ring closes the screen itself
+
+      // 9b. The same mode on the DISCARDED path: the escalation profile changed
+      //     mid-window (1800 -> 1200 s), so the stored 07:20 deadline is no longer
+      //     this occurrence's 07:30 one. The cycle is ended -- and the ring must
+      //     still happen at once at 07:35, because the ramp for a 07:50 alarm is
+      //     already 5 minutes overdue. The restart basis (07:50) is still AHEAD of
+      //     now, which is what distinguishes this from case 5.
+      c.full_dev_s = 1200;
+      c.now = at(2026, 8, 5, 7, 35);
+      d = win_decide(&c);
+      assert(d.end_cycle);
+      assert(d.action == AC_WIN_RING_NOW);
+      assert(d.deadline == at(2026, 8, 5, 7, 30));
+      assert(!d.abandon_screen);
+    }
+
+    // 10. ORDINARY MID-WINDOW RE-ENTRIES, nothing changed, under both of the
+    //     non-AWAKE_BY modes: continue from the stored values and touch nothing.
+    //     The plain case, asserted because two separate fixes broke it (round 1
+    //     discarded the live RING_FROM window; the round-2 restart basis had to be
+    //     kept from re-deriving one).
+    {
+      // RING_LATEST: the window sits [T - w, T], so it opens at 07:20 and the
+      // deadline IS the alarm time.
+      WinCase latest = { .alarms = &daily, .count = 1, .now = at(2026, 8, 5, 7, 35),
+                         .semantics = SEMANTICS_RING_LATEST,
+                         .smart_window_active = true, .window_min = 30,
+                         .pending_slot = 0,
+                         .window_started_at = at(2026, 8, 5, 7, 20),
+                         .deadline_at = t0750, .served_slot = -1 };
+      AcWindowDecision d = win_decide(&latest);
+      assert(d.action == AC_WIN_OPEN && d.slot == 0);
+      assert(d.window_start == at(2026, 8, 5, 7, 20) && d.deadline == t0750);
+      assert(!d.end_cycle && !d.abandon_screen);
+
+      // RING_FROM: the window sits [T, T + w]; re-entry a minute before the far
+      // end, the point at which `when` has long since become tomorrow's.
+      WinCase from = { .alarms = &daily, .count = 1, .now = at(2026, 8, 5, 8, 19),
+                       .semantics = SEMANTICS_RING_FROM,
+                       .smart_window_active = true, .window_min = 30,
+                       .pending_slot = 0, .window_started_at = t0750,
+                       .deadline_at = t0820, .served_slot = -1 };
+      d = win_decide(&from);
+      assert(d.action == AC_WIN_OPEN && d.slot == 0);
+      assert(d.window_start == t0750 && d.deadline == t0820);
+      assert(!d.end_cycle && !d.abandon_screen);
+    }
+
+    // The smart window switched off entirely (the setting, or a zero length):
+    // nothing to open, and the alarm is left to its hard deadline via the re-arm.
+    {
+      WinCase c = { .alarms = &daily, .count = 1, .now = at(2026, 8, 5, 7, 35),
+                    .semantics = SEMANTICS_RING_LATEST, .smart_window_active = false,
+                    .window_min = 0, .pending_slot = -1, .served_slot = -1 };
+      AcWindowDecision d = win_decide(&c);
+      assert(d.action == AC_WIN_REARM_ONLY);
+      assert(!d.end_cycle && !d.abandon_screen);
+    }
+
+    // A window whose start is still ahead: there is nothing to open yet, and
+    // opening it would put a multi-hour "window" on the 1-minute poll, which could
+    // fire on ordinary daytime movement.
+    {
+      WinCase c = { .alarms = &daily, .count = 1, .now = at(2026, 8, 5, 3, 0),
+                    .semantics = SEMANTICS_RING_LATEST, .smart_window_active = true,
+                    .window_min = 30, .pending_slot = -1, .served_slot = -1 };
+      AcWindowDecision d = win_decide(&c);
+      assert(d.action == AC_WIN_REARM_ONLY);
+      assert(!d.end_cycle && !d.abandon_screen);
     }
   }
 
