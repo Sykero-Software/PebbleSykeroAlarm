@@ -55,6 +55,32 @@ typedef struct {
 // difference, which is the correct behaviour for an alarm clock.
 time_t ac_next_occurrence(const Alarm *a, time_t now);
 
+// How many occurrences ac_last_past_occurrence will walk before giving up. Both
+// callers search a 25-hour span (at most two occurrences of one alarm), so this
+// is slack, not a limit anyone should be near.
+#define AC_LAST_PAST_MAX_STEPS 40
+
+// The most recent occurrence of `a` at or before `now`, searching forward from
+// `search_from`; 0 if the alarm has none in that span (or is disabled).
+//
+// This is NOT `ac_next_occurrence(a, now - <span>)`, and the difference is the
+// reason the function exists. ac_next_occurrence returns the FIRST occurrence
+// after its base, so for a daily alarm that spelling answers with the occurrence
+// 24 h too early whenever `now` is less than an hour past the alarm -- and
+// answers correctly for the rest of the day, so it reads as working. It was
+// written twice in the debug dump; one copy was fixed in place and the other was
+// not, and the dump of 2026-08-06 (taken 17 min after a 07:50 alarm) printed
+// `a0 prev=08-05 07:50` beside `eval alarm=08-06 07:50` -- one artefact naming
+// two different alarms as the one that had just rung.
+//
+// `now` itself counts as past: at the ring instant the occurrence in hand is the
+// one ringing, not yesterday's. `search_from` after `now` yields 0.
+//
+// Disabled/skip_next are honoured as ac_next_occurrence honours them, so a
+// caller that wants the raw grid regardless of those two (both dump sites do)
+// passes a probe copy with them forced, exactly as it would for ac_next_occurrence.
+time_t ac_last_past_occurrence(const Alarm *a, time_t now, time_t search_from);
+
 // Index of the alarm that fires soonest, or -1 if none will. On success writes
 // that alarm's time to *out_when (may be NULL).
 int ac_next_alarm(const Alarm *alarms, int count, time_t now, time_t *out_when);

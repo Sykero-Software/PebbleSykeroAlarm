@@ -1306,6 +1306,67 @@ int main(void) {
     }
   }
 
+  // ---------------------------------------------------------------------
+  // ac_last_past_occurrence -- "which occurrence just rang?"
+  //
+  // This exists because the naive spelling is wrong in a way that only shows up
+  // some of the time. `ac_next_occurrence(a, now - 25h)` returns the FIRST
+  // occurrence after that base, so for a daily alarm it answers with the one
+  // 24 h too early whenever `now` is less than an hour past the alarm -- and it
+  // answers correctly the rest of the day, which is why it survived. The dump of
+  // 2026-08-06, taken 17 minutes after a 07:50 alarm, printed
+  // `a0 prev=08-05 07:50` next to `eval alarm=08-06 07:50`: the same artefact
+  // disagreeing with itself, on the one field a reader uses to check that the
+  // app and the user mean the same alarm.
+  {
+    Alarm daily = { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x7f,
+                    .enabled = true, .skip_next = false };
+    time_t from = at(2026, 8, 6, 8, 7) - 25 * 3600;
+
+    // The regression: 17 minutes after the alarm, the answer is TODAY's.
+    assert(ac_last_past_occurrence(&daily, at(2026, 8, 6, 8, 7), from)
+           == at(2026, 8, 6, 7, 50));
+
+    // Late the same evening -- the case the naive version happened to get right,
+    // kept so a "simplification" back to it fails here too.
+    assert(ac_last_past_occurrence(&daily, at(2026, 8, 5, 19, 17),
+                                   at(2026, 8, 5, 19, 17) - 25 * 3600)
+           == at(2026, 8, 5, 7, 50));
+
+    // At the ring instant itself the occurrence in hand is the one ringing, not
+    // yesterday's: the dump runs while an alarm is live often enough to matter.
+    assert(ac_last_past_occurrence(&daily, at(2026, 8, 6, 7, 50),
+                                   at(2026, 8, 6, 7, 50) - 25 * 3600)
+           == at(2026, 8, 6, 7, 50));
+
+    // One second before it, today's has not happened -- yesterday's is the last.
+    assert(ac_last_past_occurrence(&daily, at(2026, 8, 6, 7, 50) - 1,
+                                   at(2026, 8, 6, 7, 50) - 1 - 25 * 3600)
+           == at(2026, 8, 5, 7, 50));
+
+    // Nothing in the searched span: a Monday-only alarm read on a Thursday.
+    Alarm mondays = { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x01,
+                      .enabled = true, .skip_next = false };
+    assert(ac_last_past_occurrence(&mondays, at(2026, 8, 6, 8, 7), from) == 0);
+
+    // A disabled alarm has no occurrences at all -- both dump sites probe with a
+    // forced-enabled copy precisely because they want the raw grid instead.
+    Alarm off = daily;
+    off.enabled = false;
+    assert(ac_last_past_occurrence(&off, at(2026, 8, 6, 8, 7), from) == 0);
+
+    // A search window that starts after `now` is empty, not an infinite walk.
+    assert(ac_last_past_occurrence(&daily, at(2026, 8, 6, 8, 7),
+                                   at(2026, 8, 7, 0, 0)) == 0);
+
+    // A month-long span still answers with the LAST one, not the first it meets:
+    // the walk is bounded (AC_LAST_PAST_MAX_STEPS), and the bound has to be
+    // generous enough that a realistic span cannot truncate to a stale answer.
+    assert(ac_last_past_occurrence(&daily, at(2026, 8, 6, 8, 7),
+                                   at(2026, 7, 8, 0, 0))
+           == at(2026, 8, 6, 7, 50));
+  }
+
   printf("test_alarm_calc: all assertions passed\n");
   return 0;
 }

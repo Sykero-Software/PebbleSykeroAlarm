@@ -235,10 +235,12 @@ static void prv_dump_alarm(int i) {
   probe.enabled = true;      // ac_next_occurrence returns 0 for a disabled slot
   probe.skip_next = false;   // ... and skips one for skip_next; want the raw grid
   time_t next = ac_next_occurrence(&probe, now);
-  time_t prev = ac_next_occurrence(&probe, now - 25 * SECONDS_PER_HOUR);
-  if (prev > now) {
-    prev = 0;   // nothing in the last 25 h (weekday pattern skipped it)
-  }
+  // ac_next_occurrence(probe, now - 25 h) is the wrong spelling here and used to
+  // be what this line said: it returns the FIRST occurrence after that base, so
+  // 17 minutes after a daily 07:50 alarm it named YESTERDAY's -- printing
+  // `prev=08-05 07:50` in a dump whose own eval line said `alarm=08-06 07:50`.
+  // 0 when the weekday pattern skipped the last 25 h.
+  time_t prev = ac_last_past_occurrence(&probe, now, now - 25 * SECONDS_PER_HOUR);
   char a[20], b[20];
   APP_LOG(APP_LOG_LEVEL_INFO,
           "DBG a%d en=%d skip=%d %02u:%02u mask=%02x prev=%s next=%s",
@@ -504,20 +506,12 @@ void dbg_dump(const Alarm *alarms, int count, const Config *cfg,
     bool was_enabled = probe.enabled;
     probe.enabled = true;
     probe.skip_next = false;
-    // ac_next_occurrence returns the FIRST occurrence after its base, so for a
-    // daily alarm a base of now-25h yields YESTERDAY's -- which picked the wrong
-    // alarm on the first real dump. Walk forward and keep the last one that is
-    // still in the past.
-    time_t t = 0;
-    time_t cur = now - 25 * SECONDS_PER_HOUR;
-    for (int step = 0; step < 40; step++) {
-      time_t nx = ac_next_occurrence(&probe, cur);
-      if (nx == 0 || nx > now) {
-        break;
-      }
-      t = nx;
-      cur = nx;
-    }
+    // "The last occurrence still in the past" -- NOT ac_next_occurrence from a
+    // now-25h base, which picked the wrong alarm on the first real dump. This
+    // used to be an open-coded walk here; it is shared and host-tested now,
+    // because the naive version was also live in prv_dump_alarm above and stayed
+    // wrong there for another five days.
+    time_t t = ac_last_past_occurrence(&probe, now, now - 25 * SECONDS_PER_HOUR);
     if (t == 0) {
       continue;
     }

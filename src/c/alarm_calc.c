@@ -81,6 +81,20 @@ time_t ac_next_occurrence(const Alarm *a, time_t now) {
   return prv_nth_occurrence(a, now, a->skip_next ? 2 : 1);
 }
 
+time_t ac_last_past_occurrence(const Alarm *a, time_t now, time_t search_from) {
+  time_t last = 0;
+  time_t cur = search_from;
+  for (int step = 0; step < AC_LAST_PAST_MAX_STEPS; step++) {
+    time_t nx = ac_next_occurrence(a, cur);
+    if (nx == 0 || nx > now) {
+      break;
+    }
+    last = nx;
+    cur = nx;   // strictly after, so the walk always advances and terminates
+  }
+  return last;
+}
+
 int ac_next_alarm(const Alarm *alarms, int count, time_t now, time_t *out_when) {
   int best = -1;
   time_t best_when = 0;
