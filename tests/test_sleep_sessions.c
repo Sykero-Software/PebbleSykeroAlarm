@@ -1,19 +1,26 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //
-// se_merge_sessions / se_mark_awake, plus a replay of a REAL recorded night
-// (tests/fixtures/night_2026_08_05.h) through the production se_evaluate.
+// se_merge_sessions / se_mark_awake, plus a replay of two REAL recorded nights
+// (tests/fixtures/night_2026_08_0{5,6}.h) through the production se_evaluate.
 //
 //   gcc -std=c11 -Wall -I src/c -o /tmp/t
 //       tests/test_sleep_sessions.c src/c/sleep_eval.c && /tmp/t
-// (no -I tests: the fixture include is relative to this file's own directory)
+// (no -I tests: the fixture includes are relative to this file's own directory)
 //
-// The night is the one that motivated this code: the firmware ended the sleep
+// 2026-08-05 is the night that motivated this code: the firmware ended the sleep
 // session at a night waking and started a new one afterwards, which cut the
 // ranking population from the whole night down to 130 minutes, and the trip's
 // own movement was too intermittent for se_evaluate's run-length wake-episode
-// exclusion to notice.
+// exclusion to notice. 2026-08-06 is the control: one unbroken session, nothing
+// to merge and nothing to exclude, so it pins down the merging path doing
+// NOTHING and measures what the anchor alone is worth.
+//
+// Both nights are asserted against the numbers the WATCH ITSELF computed and
+// logged, never against numbers this test found agreeable -- see the fixture
+// headers for the transcribed dump lines.
 #include "sleep_eval.h"
 #include "fixtures/night_2026_08_05.h"
+#include "fixtures/night_2026_08_06.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -350,6 +357,105 @@ int main(void) {
     int onset_idx = -1;
     SleepEvalResult r = chain(WIN + 6 + 1, 90, 2, &onset_idx);
     assert(!r.insufficient_data && r.fire);
+  }
+
+  // ------------------------------------------- the recorded night of 2026-08-06
+  //
+  // The next night, and the control case for the one above: the firmware reported
+  // ONE unbroken session, so se_merge_sessions has nothing to merge, se_mark_awake
+  // nothing to exclude, and the whole night is the population by default. What it
+  // still measures is how much the ANCHOR alone moves the trigger level -- 581
+  // from the raw history start (21:50, with an hour of being awake in it) against
+  // 354 from the merged onset (23:50) -- and that here it changes nothing: every
+  // anchor, and every percentile from 75 to 95, fires at 07:51, one minute into
+  // the window, because the sleeper was already stirring when it opened.
+  //
+  // Every number asserted below is transcribed from the watch's own dump of this
+  // night (`Dump last night` -> `pebble logs`, run 2026-08-06 08:07):
+  //
+  //   DBG cfg smart=1 win=30min sem=2 sens=1 pct=90 mins=2 prof=1
+  //   DBG hist first=08-05 21:50 n=618 widx=600
+  //   DBG onset merged=08-05 23:50 newest=08-05 23:50 sessions=1 gaps=0
+  //   DBG sess0 08-05 23:50 -> 08-06 08:02
+  //   DBG eval pct=90/2min base=0 lvl=581 fire=1 fidx=601 at=08-06 07:51 acc=2006 insuf=0
+  //   DBG evalonset off=120 base=0 lvl=354 fire=1 fidx=481 at=08-06 07:51 acc=2233
+  //   DBG evalalt pct=95 lvl=1192 fire=1 fidx=601 at=08-06 07:51 acc=1395
+  //   DBG evalalt pct=90 lvl=581  fire=1 fidx=601 at=08-06 07:51 acc=2006
+  //   DBG evalalt pct=82 lvl=25   fire=1 fidx=601 at=08-06 07:51 acc=2562
+  //   DBG evalalt pct=75 lvl=25   fire=1 fidx=601 at=08-06 07:51 acc=2562
+  //
+  // What is deliberately NOT asserted: the LIVE run that morning recorded acc=800
+  // at the fire point (2 x orient_bonus, no vmc contribution at all) and no P95
+  // fire (`n0 alt 95=--:--`), because the minute in progress returns a PARTIAL
+  // vmc -- the live decision saw a fraction of the minute the replay reads back
+  // whole. Both are correct; a retrospective replay is not the live decision, and
+  // trying to make this test reproduce acc=800 or the live P95 stand-down would be
+  // encoding the sampling artefact, not the algorithm.
+  const int WIN_0806 = night_0806_idx(7, 50);
+  const int FIRE_0806 = night_0806_idx(7, 51);
+  assert(WIN_0806 == 600 && FIRE_0806 == 601);
+  {
+    // One session: nothing to merge, no awake gap, onset = the session's start.
+    NIGHT_0806_SPANS(spans);
+    SleepSpan gaps[SE_MAX_SESSIONS];
+    int n = -1;
+    uint32_t onset = se_merge_sessions(spans, 1, SE_SESSION_MERGE_GAP_S, gaps,
+                                       SE_MAX_SESSIONS, &n);
+    assert(n == 0);
+    assert(onset == NIGHT_0806_FIRST_UTC
+                        + (uint32_t)night_0806_idx(23, 50) * MIN_S);
+  }
+  {
+    // Anchored at the start of the recorded history (21:50), i.e. the whole
+    // 618-minute stretch including the waking hour before bed.
+    night_0806_load(g_s);
+    SleepEvalResult r = eval_from(0, WIN_0806, 90, 2, NIGHT_0806_LEN);
+    assert(!r.insufficient_data);
+    assert(r.baseline == 0);
+    assert(r.trigger_level == 581);
+    assert(r.fire && r.fired_index == FIRE_0806);
+    assert(r.acc == 2006);
+    printf("  night 08-06, from 21:50: lvl=%u fired 07:51 acc=%lu\n",
+           r.trigger_level, (unsigned long)r.acc);
+  }
+  {
+    // The production chain, anchored at the merged onset: the awake hour before
+    // bed drops out of the population, which nearly halves the level (581 -> 354)
+    // without moving the fire point by a minute.
+    night_0806_load(g_s);
+    NIGHT_0806_SPANS(spans);
+    SleepSpan gaps[SE_MAX_SESSIONS];
+    int n_gaps = -1;
+    uint32_t onset = se_merge_sessions(spans, 1, SE_SESSION_MERGE_GAP_S, gaps,
+                                       SE_MAX_SESSIONS, &n_gaps);
+    se_mark_awake(g_s, NIGHT_0806_LEN, NIGHT_0806_FIRST_UTC, gaps, n_gaps);
+    int anchor = (int)((onset - NIGHT_0806_FIRST_UTC) / MIN_S);
+    assert(anchor == 120 && anchor == night_0806_idx(23, 50));
+    SleepEvalResult r = eval_from(anchor, WIN_0806, 90, 2, NIGHT_0806_LEN);
+    assert(!r.insufficient_data);
+    assert(r.baseline == 0);
+    assert(r.trigger_level == 354);
+    assert(r.fire && r.fired_index == 481 && anchor + r.fired_index == FIRE_0806);
+    assert(r.acc == 2233);
+    printf("  night 08-06, from onset 23:50 (off=%d): lvl=%u fired 07:51"
+           " (matches the watch)\n", anchor, r.trigger_level);
+  }
+  {
+    // Sensitivity sweep, anchored at 21:50 as the dump's `evalalt` lines are: the
+    // level spans 1192 -> 25 and the fire point does not move at all, so this
+    // night says nothing about where the sensitivity setting should sit -- worth
+    // recording precisely because it is the opposite of a discriminating night.
+    static const struct { uint8_t pct; uint16_t lvl; uint32_t acc; } k_alt[4] = {
+      { 95, 1192, 1395 }, { 90, 581, 2006 }, { 82, 25, 2562 }, { 75, 25, 2562 },
+    };
+    for (int k = 0; k < 4; k++) {
+      night_0806_load(g_s);
+      SleepEvalResult r = eval_from(0, WIN_0806, k_alt[k].pct, 2, NIGHT_0806_LEN);
+      assert(r.trigger_level == k_alt[k].lvl);
+      assert(r.fire && r.fired_index == FIRE_0806);
+      assert(r.acc == k_alt[k].acc);
+    }
+    printf("  night 08-06, P95..P75: lvl 1192..25, all firing at 07:51\n");
   }
 
   printf("test_sleep_sessions: all assertions passed\n");
