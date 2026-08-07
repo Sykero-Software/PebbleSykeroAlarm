@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <time.h>
 
-// Wakeup cookies. Five of the eight per-app slots are used; three stay spare.
+// Wakeup cookies. Six of the eight per-app slots are used; two stay spare.
 typedef enum {
   WC_DEADLINE = 1,   // the hard alarm time — always rings, never dropped
   WC_WINDOW   = 2,   // start of the smart window
