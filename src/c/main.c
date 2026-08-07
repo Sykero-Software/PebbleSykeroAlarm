@@ -1392,6 +1392,19 @@ static void ring_stop_now(void) {
   close_to_watchface();
 }
 
+// Is a snooze available at all right now? Snoozing switched off, or the
+// allowance spent, and there is nothing left to grant -- the SELECT menu has
+// nothing to offer, the "+" hint has nothing to promise, and (see
+// ring_snooze_for) a UP press has nothing to do but stop the alarm. One
+// predicate, used at all three sites: backlog items 25 and 30f are this app's
+// running record of what happens when the same "is a snooze possible" check
+// is hand-copied instead -- a loop fixed in one copy and left wrong in its
+// sibling, and a comment that told the truth about only one of two copies.
+static bool snooze_exhausted(void) {
+  return s_cfg.snooze_min == 0
+      || (s_cfg.snooze_max != 0 && s_rs.snooze_count >= s_cfg.snooze_max);
+}
+
 // `minutes` is the length THIS snooze runs for: s_cfg.snooze_min from the UP
 // button, or whatever the SELECT menu offered. Nothing else differs between the
 // two -- the snooze counts against snooze_max either way, bumps snooze_count and
@@ -1402,9 +1415,13 @@ static void ring_stop_now(void) {
 // snooze_min), so the next UP press still means the configured default.
 static void ring_snooze_for(uint16_t minutes) {
   // Out of snoozes (or snoozing disabled) behaves as Stop rather than doing
-  // nothing, so the button is never inert.
-  if (s_cfg.snooze_min == 0
-      || (s_cfg.snooze_max != 0 && s_rs.snooze_count >= s_cfg.snooze_max)) {
+  // nothing, so UP is never inert -- it asks for "a" snooze, and Stop is the
+  // honest answer when there isn't one. SELECT is different (see
+  // ring_select_multi below): it asks for a SPECIFIC length from a menu, and
+  // answering "45 min" with "alarm stopped" would read as the app ignoring
+  // the number the user just picked -- so SELECT goes inert instead of
+  // reaching this branch at all, via the same snooze_exhausted() predicate.
+  if (snooze_exhausted()) {
     APP_LOG(APP_LOG_LEVEL_INFO, "SNOOZE exhausted -> stop");
     ring_stop_now();
     return;
@@ -1577,8 +1594,16 @@ static void snooze_menu_did_close(ActionMenu *menu, const ActionMenuItem *item, 
 // act, and a confirmation inside a modal the user had to double-press to reach
 // would be ceremony.
 static void ring_select_multi(ClickRecognizerRef rec, void *ctx) {
-  if (s_cfg.snooze_min == 0) {
-    return;   // snoozing is off; the "+" is hidden and this button is inert
+  // Inert on the SAME predicate that hides the "+" in ring_window_load
+  // (snooze_exhausted): snoozing off, or the allowance already spent. Gating
+  // on snooze_min alone (as this used to) let the menu open with the
+  // allowance exhausted -- every choice then fell into ring_snooze_for's own
+  // exhausted branch and stopped the alarm instead of snoozing, which reads
+  // as the app ignoring the specific length the user just picked (backlog
+  // 30a). Checking the same thing the hidden "+" already promised means an
+  // inert button never advertises itself as live.
+  if (snooze_exhausted()) {
+    return;
   }
   if (click_number_of_clicks_counted(rec) < STOP_PRESSES) {
     show_press_again_hint("choose a snooze");
@@ -1749,7 +1774,16 @@ static void ring_window_load(Window *w) {
   text_layer_set_text(s_ring_plus, "+");
   night_text_layer(s_ring_plus);
   layer_add_child(root, text_layer_get_layer(s_ring_plus));
-  layer_set_hidden(text_layer_get_layer(s_ring_plus), s_cfg.snooze_min == 0);
+  // Hidden on the same snooze_exhausted() predicate ring_select_multi gates
+  // on, not snooze_min alone -- an allowance already spent by the time this
+  // window is (re)built must hide the "+" too, or it promises a menu that
+  // would open with nothing to offer. Evaluated once here at window-load
+  // time rather than kept live: snooze_count (the other half of the
+  // predicate) only changes inside ring_snooze_for, which always pops this
+  // window before the count can be re-read, and the next ring rebuilds the
+  // window from scratch -- so there is no path where the predicate's value
+  // changes while this window stays on screen.
+  layer_set_hidden(text_layer_get_layer(s_ring_plus), snooze_exhausted());
 
   // Time + subtitle share the band left between the two button labels, split
   // proportionally (60/40) -- verified by screenshot on both boards rather
