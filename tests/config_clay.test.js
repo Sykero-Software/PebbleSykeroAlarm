@@ -251,3 +251,26 @@ test('DebugFeatures: the Diagnostics row\'s runtime gate', () => {
                           DebugFeatures: { value: 'false' } });
   assert.strictEqual(str.DebugFeatures, 0, "the string 'false' must map to 0");
 });
+
+test('PreAlarmMin offers the pre-alarm screen lead, defaulting to an hour', () => {
+  const item = byKey.get('PreAlarmMin');
+  assert.ok(item, 'the config page must offer a PreAlarmMin select');
+  assert.strictEqual(item.type, 'select');
+  // Clay hands DOM values back as STRINGS, so the option values and the default
+  // must be strings too -- an int default here is the class of bug that blanks
+  // a Clay page (see the radiogroup note in the superrepo CLAUDE.md).
+  assert.strictEqual(item.defaultValue, '60');
+  assert.deepStrictEqual(item.options.map((o) => o.value),
+                         ['0', '15', '30', '60', '90']);
+  assert.ok(NUMERIC_KEYS.indexOf('PreAlarmMin') >= 0,
+            'PreAlarmMin must be parseInt-ed before it reaches the watch');
+
+  // The wire value: a DOM string becomes an int, and Off is a real 0 rather
+  // than being dropped (buildDict skips '' and undefined, not '0').
+  const on = buildDict({ AlarmList: { value: '07:50|1111111' },
+                         PreAlarmMin: { value: '60' } });
+  assert.strictEqual(on.PreAlarmMin, 60);
+  const off = buildDict({ AlarmList: { value: '07:50|1111111' },
+                          PreAlarmMin: { value: '0' } });
+  assert.strictEqual(off.PreAlarmMin, 0);
+});

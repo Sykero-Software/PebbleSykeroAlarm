@@ -46,7 +46,17 @@
 // discards it; the phone's launch handshake (CfgRequest) then re-applies the
 // user's real settings within seconds, and alarms are unaffected because they
 // live in PK_ALARMS/PK_ALARMSET, not here.
-#define CONFIG_VERSION    4
+//
+// Bumped 4 -> 5: Config gained pre_alarm_min. Unlike the 3 -> 4 bump, the v4
+// struct had NO tail padding left to absorb it (the two trailing bools already
+// filled the struct out to its 2-byte alignment exactly), so this uint8_t
+// pushes sizeof(Config) from 34 to 36 -- measured, not assumed -- as the
+// compiler adds a fresh padding byte to stay 2-byte aligned. The length check
+// in as_load_config would therefore actually catch a stale v4 blob on its own
+// this time. The version is still bumped, for the same reason the 2 -> 3 note
+// gives: relying on a size change is exactly the assumption the 1 -> 2 case
+// shows to be unsafe, so the explicit version stays the thing that decides it.
+#define CONFIG_VERSION    5
 // Bumped 1 -> 2: RunState gained served_slot/served_at, the record of which alarm
 // occurrence has already rung. sizeof(RunState) changes, so as_load_runstate's
 // length check would discard a stale blob on its own; the bump states the intent
@@ -87,6 +97,12 @@ typedef struct {
   // from the phone only when producing a bug report. Runtime rather than a
   // compile flag deliberately -- see debug_dump.h.
   bool     debug_features;
+  // Minutes before the alarm at which the pre-alarm waiting screen opens; 0 is
+  // off. Its whole purpose is that a user who wakes by themselves can end the
+  // alarm from a screen that is already up, instead of lying there waiting for
+  // it to go off. Independent of smart_enabled -- with the smart alarm off this
+  // is the only screen there is before the ring.
+  uint8_t  pre_alarm_min;          // 0..90
 } Config;
 
 // Live state that must survive the app being killed or the watch rebooting.

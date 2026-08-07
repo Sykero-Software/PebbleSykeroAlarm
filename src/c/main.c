@@ -389,6 +389,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   GET_INT(SnoozeMin, snooze_min);
   GET_INT(SnoozeMax, snooze_max);
   GET_INT(SnoozeRampOffsetS, snooze_ramp_offset_s);
+  GET_INT(PreAlarmMin, pre_alarm_min);
   GET_BOOL(EscRampVib, esc_ramp_vib);
   // DebugFeatures changes main_rows()'s row count (the Diagnostics row), same
   // as any other field here that reload_and_rearm() already reacts to -- no

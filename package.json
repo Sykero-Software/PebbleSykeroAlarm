@@ -50,7 +50,8 @@
       "SnoozeRampOffsetS",
       "CfgRequest",
       "EscRampVib",
-      "DebugFeatures"
+      "DebugFeatures",
+      "PreAlarmMin"
     ],
     "resources": {
       "media": [

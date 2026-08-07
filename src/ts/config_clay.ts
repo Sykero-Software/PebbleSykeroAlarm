@@ -44,6 +44,18 @@ export function buildConfig(): any[] {
         { label: '20 min', value: '20' }, { label: '30 min', value: '30' },
         { label: '45 min', value: '45' }, { label: '60 min', value: '60' },
       ] },
+    { type: 'select', messageKey: 'PreAlarmMin', label: 'Show alarm screen before',
+      defaultValue: '60', id: 'pre-alarm-min',
+      options: [
+        { label: 'Off', value: '0' }, { label: '15 min', value: '15' },
+        { label: '30 min', value: '30' }, { label: '60 min', value: '60' },
+        { label: '90 min', value: '90' },
+      ],
+      description: 'Opens the alarm\'s waiting screen this long before the '
+                 + 'alarm, so you can cancel it with two presses of the bottom '
+                 + 'button if you wake up early. Independent of the smart '
+                 + 'alarm: it works with the smart alarm off too, and it never '
+                 + 'makes the alarm ring any earlier.' },
     // Three modes, spelled out with both ends of each window, because the old
     // two-option wording ("Ringing starts then") was read as "not before then"
     // when it meant the opposite. Say which direction the window moves the ring.

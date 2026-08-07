@@ -111,6 +111,7 @@ void as_load_config(Config *out) {
     out->version = CONFIG_VERSION;
     out->smart_enabled = true;
     out->smart_window_min = 30;
+    out->pre_alarm_min = 60;   // an hour, the user's default (2026-08-07)
     out->time_semantics = SEMANTICS_RING_STARTS;
     out->sensitivity = SENS_MEDIUM;
     out->sens_percentile = 90;
