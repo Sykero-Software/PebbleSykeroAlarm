@@ -1018,9 +1018,13 @@ static void main_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
       menu_cell_basic_draw(gctx, cell, "Test alarm", "rings in 2 min", NULL);
       break;
     case MAIN_ROW_DUMP:
-      // "takes a few seconds" is not decoration: the dump reads up to 640
-      // minutes of health history and holds the event loop 1.5-4 s, which is the
-      // "buttons do not respond" report that got it removed from app launch.
+      // The subtitle says only what the row is FOR, not what it costs: dbg_dump
+      // reads up to 640 minutes of health history and holds the event loop for
+      // 1.5-4 s, which is the "buttons do not respond when I open the app"
+      // report that got it removed from running at launch (see debug_dump.h).
+      // That warning is deliberately NOT repeated here -- the phone's Clay
+      // config page already describes the wait next to the Debugging toggle,
+      // and a user who has just turned that toggle on has already read it.
       menu_cell_basic_draw(gctx, cell, "Diagnostics", "for a bug report", NULL);
       break;
     default:
