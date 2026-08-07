@@ -35,7 +35,7 @@ void sc_cancel_all(void);
 // scheduled (currently: the pending snooze wakeup, when RunState says one is
 // due) -- true otherwise, including when there was nothing critical to arm.
 // A caller that is about to exit the app on the strength of "the wakeup is
-// armed" (ring_snooze_now) must check this rather than assume success.
+// armed" (ring_snooze_for) must check this rather than assume success.
 //
 // `ringing` must be the caller's live "an alarm is ringing right now" state.
 // It cannot be derived from RunState: a first, un-snoozed ring has
@@ -60,7 +60,11 @@ time_t sc_ring_deadline(const Config *cfg, time_t alarm_time);
 time_t sc_window_start(const Config *cfg, time_t alarm_time);
 
 // The slot index of the next occurrence that has not already rung, or -1;
-// writes that occurrence's time to *alarm_when (untouched when it returns -1).
+// writes that occurrence's time to *alarm_when, or 0 when it returns -1
+// (ac_next_alarm_unserved's own -1 path writes *out_when = 0, so this
+// documents what the code does rather than leaving it as an out-parameter
+// whose value on failure a future caller would have to guess at or re-derive
+// from the .c file).
 // Shared -- not just factored out of sc_rearm for tidiness -- because the
 // pre-alarm wakeup handler (main.c) must name the exact same occurrence
 // sc_rearm armed. A second private copy of this walk is precisely the defect

@@ -336,6 +336,13 @@ static void runstate_begin_cycle(int slot, time_t window_start, time_t deadline,
     if (tt) { s_cfg.field = tt->value->int32 != 0; changed = true; } \
   } while (0)
 
+// Forward-declared: the pre-alarm screen's own statics (s_pre_slot and
+// friends) are declared much further down, next to the rest of the smart-
+// window state, and this file's convention is to never move statics just to
+// satisfy an earlier caller. Defined next to s_pre_alarm_at; called from
+// inbox_received below, before an AlarmSet reindex can invalidate s_pre_slot.
+static void prv_drop_prealarm_record(void);
+
 static void inbox_received(DictionaryIterator *iter, void *context) {
   Tuple *t = dict_find(iter, MESSAGE_KEY_AlarmSet);
   if (t) {
@@ -362,6 +369,17 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
       // snprintf, not strcpy: bounded, and both buffers are ALARMSET_STR_MAX.
       snprintf(s_alarmset_str, sizeof(s_alarmset_str), "%s", buf);
       as_save_alarmset_str(s_alarmset_str);
+      // ac_apply_set_if_changed just rebuilt s_alarms from the wire string with
+      // NO remap of anything -- ac_prune_spent_one_time remaps pending_slot/
+      // served_slot, but nothing remaps s_pre_slot, because the pre-alarm
+      // screen deliberately keeps its own record instead of living in
+      // RunState. If the indices shifted, DOWN 2x on that screen would now do
+      // two wrong things at once: not cancel the alarm actually named on
+      // screen (it rings anyway, having been promised otherwise), and stamp a
+      // DIFFERENT alarm served -- silently skipping it, and disabling it
+      // outright if it is one-time. That is this app's worst failure mode, so
+      // drop the record rather than risk it.
+      prv_drop_prealarm_record();
       reload_and_rearm();
     }
   }
@@ -1575,10 +1593,22 @@ static void ring_select_multi(ClickRecognizerRef rec, void *ctx) {
     .root_level = root,
     .context = root,
     .did_close = snooze_menu_did_close,
+    // .colors tints the ActionMenu's LEFT COLUMN (background) and its crumb
+    // trail (foreground) -- pebble.h's own documentation of
+    // ActionMenuConfig.colors, ~line 8256. The menu BODY (the list of
+    // durations itself) keeps the system palette regardless; these two
+    // colours do not repaint it. Kept anyway: harmless, and the controller
+    // has looked at the result on both diorite and emery.
     .colors = { .background = NIGHT_BG, .foreground = GColorWhite },
     .align = ActionMenuAlignCenter,
   };
   s_snooze_menu = action_menu_open(&cfg);
+  if (!s_snooze_menu) {
+    // action_menu_open can return NULL (e.g. out of memory); when it does,
+    // did_close never runs, so nothing would otherwise destroy `root` --
+    // a leak of the whole hierarchy on every failed press on a tight heap.
+    action_menu_hierarchy_destroy(root, NULL, NULL);
+  }
 }
 
 // BACK is bound EXPLICITLY to a no-op. An unbound BACK pops the window by
@@ -1640,9 +1670,15 @@ static void ring_window_load(Window *w) {
   // centred in a box that is short on one side reads as crooked at 42 pt.
   //
   // Declared here rather than down by the "+" label itself, because it is also
-  // fed to ring_time_font below: the font chooser must measure "00:00" against
-  // the SAME narrowed width the clock is actually drawn at, not the full board
-  // width, or the two would disagree about what fits.
+  // fed to ring_time_font below, which measures "00:00" against this narrowed
+  // width -- hygiene (measure the box you actually draw in), not a decision
+  // dependency: ring_time_font only tests sz.h <= time_h, and "00:00" is one
+  // unbreakable token under GTextOverflowModeFill, so its measured HEIGHT does
+  // not vary with width -- narrowing the probe cannot change which font is
+  // picked. What narrowing DOES put at risk is horizontal clipping, which
+  // nothing here tests; that was settled by screenshot instead, on both
+  // diorite and emery, where the clock kept its size (21 px measured digits,
+  // before and after).
   const int PLUS_MARGIN = 16;
 
   // Follows PebbleCountdownTimer's alarm screen (src/c/main.c:344-399): the two
@@ -1865,7 +1901,7 @@ static void start_ring(int slot, bool from_deadline) {
 // --- The smart window: minute-history reads, the waiting screen, the 1-min poll. ---
 
 static Window    *s_wait_window;
-static int        s_pending_mode;   // PENDING_WAITING / PENDING_SNOOZED
+static int        s_pending_mode;   // PENDING_WAITING / PENDING_SNOOZED / PENDING_PREALARM
 // THE PRE-ALARM SCREEN CARRIES ITS OWN SLOT, because it deliberately does NOT
 // begin a cycle. runstate_begin_cycle sets window_started_at, which every
 // consumer reads as "the smart window is open": poll_cb would start reading
@@ -1888,6 +1924,34 @@ static int        s_pending_mode;   // PENDING_WAITING / PENDING_SNOOZED
 static int8_t s_pre_slot = -1;      // -1 when no pre-alarm screen is live
 static time_t s_pre_deadline;       // the RING instant of that occurrence
 static time_t s_pre_alarm_at;       // the ALARM instant itself (may differ)
+
+// Forward-declared above inbox_received (which runs long before these
+// statics exist in file order). Called there, before reload_and_rearm(),
+// whenever a phone AlarmSet actually changed s_alarms: ac_apply_set_if_changed
+// rebuilds the array from the wire string with no remap of anything, and
+// unlike pending_slot/served_slot (remapped by ac_prune_spent_one_time)
+// nothing remaps s_pre_slot -- it is not a RunState field, by design (see the
+// comment above s_pre_slot). If the phone's edit shifted indices, s_pre_slot
+// could now name a DIFFERENT alarm than the one captioned on screen, and DOWN
+// 2x would cancel that wrong alarm while stamping it served -- silently
+// losing an alarm the user never touched. Closing is the honest response:
+// the screen's caption already named a specific alarm/deadline pair that may
+// no longer correspond to anything, and re-deriving it is unnecessary since
+// the next WC_PREALARM (the alarm's own wakeup is still armed) recomputes the
+// caption from scratch. The alarm itself is untouched by this: its wakeups
+// are re-armed by the reload_and_rearm() that follows this call, not by
+// anything here.
+static void prv_drop_prealarm_record(void) {
+  if (s_pre_slot >= 0) {
+    s_pre_slot = -1;
+    s_pre_deadline = 0;
+    s_pre_alarm_at = 0;
+    if (s_pending_mode == PENDING_PREALARM) {
+      close_to_watchface();
+    }
+  }
+}
+
 static TextLayer *s_wait_keys;        // the two-line "how to get out" legend
 static AppTimer  *s_wait_hint_timer;
 static TextLayer *s_wait_time;
@@ -2070,7 +2134,11 @@ static void wait_show_hint(const char *msg) {
 // stamp is the same pair open_smart_window would have written -- the RING
 // deadline, which is what ac_is_served compares against after subtracting
 // lead_s. So cancelling from this screen and cancelling from the waiting
-// screen are indistinguishable to every later re-arm.
+// screen are indistinguishable to every later re-arm. This is true BECAUSE
+// WC_PREALARM's own guard (menu_cycle_state() != AC_CYCLE_NONE, in
+// handle_wakeup_cookie further down this file) never lets this screen open
+// while a real cycle -- including a ringing one left live by a force-quit --
+// exists: without that guard this function would end a cycle it does not own.
 static void wait_cancel_now(int slot, time_t deadline) {
   APP_LOG(APP_LOG_LEVEL_INFO, "%s cancel slot=%d deadline=%lu",
           s_pending_mode == PENDING_PREALARM ? "PREALARM" :
@@ -2638,7 +2706,11 @@ static void handle_wakeup_cookie(int32_t cookie) {
       // is consumed one-shot and every other wakeup this alarm needs
       // (WC_DEADLINE, and WC_WINDOW if the smart window is on) is still
       // scheduled from the last sc_rearm.
-      time_t now2 = time(NULL);
+      // `now`, from the top of this function -- no blocking call happens
+      // between there and here, so it is the same instant a fresh time(NULL)
+      // would give; two names for it would just invite a future reader to
+      // assume they differ.
+      //
       // Read from the WINDOW STACK, never from s_ringing, for the "ring" half
       // of this test -- this file's own rule at main.c:83-85, and this is the
       // SECOND time the same proxy has bitten this app. burst_cb's over_cap
@@ -2647,18 +2719,36 @@ static void handle_wakeup_cookie(int32_t cookie) {
       // here would let a WC_PREALARM for the NEXT alarm cover that notice --
       // and DOWN 2x on the pre-alarm screen would then cancel a different
       // alarm than the one the user is looking at.
+      //
+      // menu_cycle_state() covers the fourth case the window-stack/snooze/
+      // window clauses above do not: AC_CYCLE_RINGING, i.e. window_started_at
+      // == 0, snooze_count == 0 and ring_started_at != 0 with s_ring_window
+      // NOT on the stack. That is exactly what a long-BACK force-quit of a
+      // ringing alarm leaves behind (wait_window_update has its own branch
+      // for it, just above) -- on the next launch s_ring_window is NULL, so
+      // all three clauses here would pass and this screen would open on top
+      // of an unresolved ring, burying the main menu's "Ongoing alarm" row
+      // that exists to reach it. menu_cycle_state() folds snooze-pending,
+      // ringing, window-open and orphan through cycle_owner_slot()'s bound (an
+      // orphan is already repaired by the time this handler can run, since
+      // main()'s orphan repair runs before any wakeup is dispatched), so it
+      // subsumes the RunState clauses below without weakening the window-stack
+      // read the human partner asked to keep explicit.
       if ((s_ring_window && window_stack_contains_window(s_ring_window))
-          || ac_snooze_pending(s_rs.snooze_count, s_rs.ring_started_at, now2)
-          || s_rs.window_started_at != 0) {
+          || ac_snooze_pending(s_rs.snooze_count, s_rs.ring_started_at, now)
+          || s_rs.window_started_at != 0
+          || menu_cycle_state() != AC_CYCLE_NONE) {
         // Something with a stronger claim already owns the screen: a ring (or
-        // an unacknowledged missed-alarm notice), a snooze, or an open smart
+        // an unacknowledged missed-alarm notice, or a ringing cycle whose
+        // window went away with a force-quit), a snooze, or an open smart
         // window. Each of those is ABOUT this alarm or a nearer one, and each
-        // already offers the same DOWN 2x cancel.
+        // already offers the same DOWN 2x cancel (or, for a ringing cycle,
+        // the main menu's "Ongoing alarm" row).
         APP_LOG(APP_LOG_LEVEL_INFO, "PREALARM declined: cycle/ring/snooze live");
         break;
       }
       time_t when = 0;
-      int slot = sc_next_unserved(s_alarms, s_count, &s_cfg, &s_rs, now2, &when);
+      int slot = sc_next_unserved(s_alarms, s_count, &s_cfg, &s_rs, now, &when);
       if (slot < 0) {
         APP_LOG(APP_LOG_LEVEL_INFO, "PREALARM: no unserved alarm ahead");
         break;

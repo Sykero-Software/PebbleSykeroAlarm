@@ -244,7 +244,7 @@ bool ac_apply_set_if_changed(const char *incoming, const char *last_applied,
                              Alarm *out, int *count, int max);
 
 // Is a snooze in flight at `now`? While one is, RunState.ring_started_at holds
-// its EXPIRY rather than a ring start (ring_snooze_now moves it forward so the
+// its EXPIRY rather than a ring start (ring_snooze_for moves it forward so the
 // escalation ramp resumes in the right place), so all three parts matter: a
 // non-zero count, a non-zero stamp, and an expiry still ahead of us. Written
 // out by hand at every call site before this existed, and about to be written

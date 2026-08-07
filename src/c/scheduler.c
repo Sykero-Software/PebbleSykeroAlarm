@@ -165,12 +165,12 @@ bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
 
   // PRIORITY 2 — snooze expiry, if one is pending. Ahead of the window because a
   // pending snooze is a promise already made to the user. This is the one
-  // wakeup this function treats as critical to the caller: ring_snooze_now
+  // wakeup this function treats as critical to the caller: ring_snooze_for
   // (Task 7) relies on sc_rearm to actually schedule it before exiting to the
   // watchface, so failure here is reported back via the return value.
   //
   // While a snooze is pending, ring_started_at holds the snooze EXPIRY, not the
-  // ring start: ring_snooze_now (Task 7) moves it forward so ring_elapsed_s()
+  // ring start: ring_snooze_for (Task 7) moves it forward so ring_elapsed_s()
   // resumes at the right point in the ramp. So it is the wakeup time as-is —
   // adding snooze_min again here would double the snooze the user asked for.
   // A value in the past means the snooze already expired and the ring is running,
