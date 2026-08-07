@@ -774,7 +774,12 @@ static char         s_night_buf[1024];   // grown: the explanation block is new
 static void night_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
-  static NightSummary ns[NIGHT_HISTORY];   // 224 B: too big for the ~2 KB stack
+  // static, not a local: NIGHT_HISTORY(7) * sizeof(NightSummary)(32) = 224
+  // bytes against the ~2 KB app stack -- squarely the "couple hundred bytes"
+  // class that produced App fault! PC:0 LR:0 on hardware in the sibling apps.
+  // night_window_load runs from a single window-load callback (single-threaded
+  // event loop), so a non-reentrant buffer is safe, same as as_push_night's.
+  static NightSummary ns[NIGHT_HISTORY];
   int n = as_load_nights(ns, NIGHT_HISTORY);
   nt_build(ns, n, s_night_head, sizeof(s_night_head),
            s_night_buf, sizeof(s_night_buf));

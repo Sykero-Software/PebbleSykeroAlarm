@@ -69,10 +69,15 @@ void nt_build(const NightSummary *nights, int count,
     for (int k = 0; k < NIGHT_ALT_COUNT; k++) {
       char at[8];
       fmt_hhmm(t->alt_fired_min[k], at, sizeof(at));
-      APPEND(body, body_len, bo, "  %s (%u%%)  %s%s\n",
+      // No leading indent and a single-space marker (not "  *"): measured off
+      // the 144 px board, where "  Medium (90%)  07:51  *" wraps the marker
+      // onto its own line and reads as an error rather than a marker. The
+      // fallback order (plan Task 4 Step 6) is indent first, then the marker
+      // width -- never the percentile, which anchors the Custom slider.
+      APPEND(body, body_len, bo, "%s (%u%%)  %s%s\n",
              nt_sens_name(t->alt_percentile[k]),
              (unsigned)t->alt_percentile[k], at,
-             t->alt_percentile[k] == t->percentile ? "  *" : "");
+             t->alt_percentile[k] == t->percentile ? " *" : "");
     }
   }
 
