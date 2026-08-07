@@ -1772,12 +1772,23 @@ static int        s_pending_mode;   // PENDING_WAITING / PENDING_SNOOZED
 // consumer reads as "the smart window is open": poll_cb would start reading
 // minute history and evaluating sleep an hour early, sc_rearm would arm the
 // rolling re-entry, and ac_cycle_state would be asked to validate a cycle that
-// does not exist. So RunState is untouched and these two fields are the whole
-// state of this screen -- which also means it does not survive the app being
-// killed, and nothing tries to revive it. The smart window and the ring bring
-// the app back exactly as they always did.
+// does not exist. So RunState is untouched and these three fields are the
+// whole state of this screen -- which also means it does not survive the app
+// being killed, and nothing tries to revive it. The smart window and the ring
+// bring the app back exactly as they always did.
+//
+// TWO instants, not one, because they differ under SEMANTICS_RING_FROM (and
+// under AWAKE_BY when escalation's lead moves the ring start): the alarm time
+// itself (s_pre_alarm_at) is what ac_prealarm_start anchors on and what the
+// caption must NAME, while the RING deadline (s_pre_deadline) is what
+// wait_cancel_now stamps into served_at, because ac_is_served compares against
+// the ring deadline after subtracting lead_s. Conflating them would either
+// anchor the wakeup on the wrong instant or let a cancelled alarm ring anyway
+// -- they coincide only under RING_LATEST, where the caption collapses to one
+// line on purpose (see wait_window_update).
 static int8_t s_pre_slot = -1;      // -1 when no pre-alarm screen is live
 static time_t s_pre_deadline;       // the RING instant of that occurrence
+static time_t s_pre_alarm_at;       // the ALARM instant itself (may differ)
 static TextLayer *s_wait_keys;        // the two-line "how to get out" legend
 static AppTimer  *s_wait_hint_timer;
 static TextLayer *s_wait_time;
@@ -1823,9 +1834,29 @@ static void wait_window_update(void) {
   if (s_pending_mode == PENDING_PREALARM) {
     // No cycle, so the alarm time comes from this screen's own record rather
     // than from RunState.deadline_at (which is 0 until a window opens).
-    struct tm *ptm = localtime(&s_pre_deadline);
-    snprintf(sub, sizeof(sub), "Alarm %02d:%02d\nWaiting for alarm",
-             ptm->tm_hour, ptm->tm_min);
+    //
+    // localtime returns a pointer into ONE shared static buffer, so the two
+    // reads below are sequenced deliberately: copy the fields out of the
+    // first result before calling localtime again for the second, rather than
+    // holding two struct tm* at once (the second call would silently
+    // overwrite the first's storage).
+    struct tm atm = *localtime(&s_pre_alarm_at);
+    int ah = atm.tm_hour, am = atm.tm_min;
+    if (s_pre_deadline != s_pre_alarm_at) {
+      // SEMANTICS_RING_FROM (and AWAKE_BY, when escalation's lead moves the
+      // ring start) can open this screen when the ALARM time is still up to
+      // window_min minutes away, so naming only s_pre_deadline would tell the
+      // user "it rings at X" when it can ring up to window_min earlier. Name
+      // both, rather than let the screen assert a time the alarm is not.
+      struct tm dtm2 = *localtime(&s_pre_deadline);
+      snprintf(sub, sizeof(sub), "Alarm %02d:%02d\nRings by %02d:%02d",
+               ah, am, dtm2.tm_hour, dtm2.tm_min);
+    } else {
+      // RING_LATEST: the two instants coincide, so naming the same time twice
+      // would be noise rather than information -- keep the original one-line
+      // second row.
+      snprintf(sub, sizeof(sub), "Alarm %02d:%02d\nWaiting for alarm", ah, am);
+    }
   } else if (s_pending_mode == PENDING_SNOOZED) {
     // ring_started_at holds the snooze EXPIRY while one is in flight. An
     // absolute time, matching "Alarm 07:50" on the other mode -- the running
@@ -1971,6 +2002,7 @@ static void wait_down_multi(ClickRecognizerRef rec, void *ctx) {
       time_t deadline = s_pre_deadline;
       s_pre_slot = -1;
       s_pre_deadline = 0;
+      s_pre_alarm_at = 0;
       wait_cancel_now(slot, deadline);
     } else {
       wait_cancel_now(s_rs.pending_slot, (time_t)s_rs.deadline_at);
@@ -2000,6 +2032,7 @@ static void wait_back_multi(ClickRecognizerRef rec, void *ctx) {
       // itself is untouched: its WC_DEADLINE and any WC_WINDOW are still armed.
       s_pre_slot = -1;
       s_pre_deadline = 0;
+      s_pre_alarm_at = 0;
       APP_LOG(APP_LOG_LEVEL_INFO, "PREALARM -> watchface (alarm stays armed)");
     } else {
       APP_LOG(APP_LOG_LEVEL_INFO, "WAIT -> watchface (window stays open)");
@@ -2053,6 +2086,7 @@ static void open_pending_window(int mode) {
     // cancel could stamp an occurrence this screen is no longer about.
     s_pre_slot = -1;
     s_pre_deadline = 0;
+    s_pre_alarm_at = 0;
   }
   if (!s_wait_window) {
     s_wait_window = window_create();
@@ -2506,11 +2540,21 @@ static void handle_wakeup_cookie(int32_t cookie) {
       // (WC_DEADLINE, and WC_WINDOW if the smart window is on) is still
       // scheduled from the last sc_rearm.
       time_t now2 = time(NULL);
-      if (s_ringing || ac_snooze_pending(s_rs.snooze_count, s_rs.ring_started_at, now2)
+      // Read from the WINDOW STACK, never from s_ringing, for the "ring" half
+      // of this test -- this file's own rule at main.c:83-85, and this is the
+      // SECOND time the same proxy has bitten this app. burst_cb's over_cap
+      // branch clears s_ringing while deliberately leaving the "Alarm missed"
+      // screen up on s_ring_window (see its comment), so testing s_ringing
+      // here would let a WC_PREALARM for the NEXT alarm cover that notice --
+      // and DOWN 2x on the pre-alarm screen would then cancel a different
+      // alarm than the one the user is looking at.
+      if ((s_ring_window && window_stack_contains_window(s_ring_window))
+          || ac_snooze_pending(s_rs.snooze_count, s_rs.ring_started_at, now2)
           || s_rs.window_started_at != 0) {
-        // Something with a stronger claim already owns the screen: a ring, a
-        // snooze, or an open smart window. Each of those is ABOUT this alarm or
-        // a nearer one, and each already offers the same DOWN 2x cancel.
+        // Something with a stronger claim already owns the screen: a ring (or
+        // an unacknowledged missed-alarm notice), a snooze, or an open smart
+        // window. Each of those is ABOUT this alarm or a nearer one, and each
+        // already offers the same DOWN 2x cancel.
         APP_LOG(APP_LOG_LEVEL_INFO, "PREALARM declined: cycle/ring/snooze live");
         break;
       }
@@ -2521,9 +2565,10 @@ static void handle_wakeup_cookie(int32_t cookie) {
         break;
       }
       s_pre_slot = (int8_t)slot;
+      s_pre_alarm_at = when;
       s_pre_deadline = sc_ring_deadline(&s_cfg, when);
-      APP_LOG(APP_LOG_LEVEL_INFO, "PREALARM screen for slot=%d ring=%lu",
-              slot, (unsigned long)s_pre_deadline);
+      APP_LOG(APP_LOG_LEVEL_INFO, "PREALARM screen for slot=%d alarm=%lu ring=%lu",
+              slot, (unsigned long)s_pre_alarm_at, (unsigned long)s_pre_deadline);
       open_pending_window(PENDING_PREALARM);
       break;
     }
