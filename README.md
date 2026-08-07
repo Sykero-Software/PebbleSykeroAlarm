@@ -104,11 +104,10 @@ contract and Clay config) **and** every host-side C test suite
 `sleep_eval` and the phone↔watch pack contract) — no Pebble SDK or emulator
 needed for either.
 
-> The **Test alarm** row is development-build only (`SA_DEV_MENU` in
-> `src/c/debug_dump.h`); a release build is compiled with `SA_DEV_MENU 0` and
-> does not show it. The **Diagnostics** row ships in every build and is
-> revealed at runtime by a phone-side "Debugging" toggle — see "Sending a
-> diagnostic report" below.
+> The **Test alarm** and **Diagnostics** rows ship in every build and are both
+> hidden until the phone-side "Debugging" toggle is switched on — there is no
+> compile flag to remember at release time. See "Sending a diagnostic report"
+> below.
 
 ## Design docs
 
@@ -128,7 +127,7 @@ through the Pebble developer tool. If that is not for you, open **Last night** o
 watch and photograph the screen instead; it carries the numbers that matter most.
 
 1. On your phone, in this app's settings, turn on **Debugging → Show the Diagnostics
-   menu item**.
+   and Test alarm menu items**.
 2. Install the Pebble tool (needs Python 3.10–3.13):
    `uv tool install --python 3.13 pebble-tool`
 3. `pebble login` — sign in with **the same GitHub account as the Pebble app on your

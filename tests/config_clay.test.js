@@ -232,7 +232,7 @@ test('buildDict still reads legacy per-slot settings when there is no list value
   assert.strictEqual(dict.AlarmSet, '06:45|1111100');
 });
 
-test('DebugFeatures: the Diagnostics row\'s runtime gate', () => {
+test('DebugFeatures: the runtime gate for BOTH developer rows', () => {
   // A toggle, so it must reach the watch as 1/0 through BOOL_KEYS. Clay hands DOM
   // values back as strings, so a literal 'false' must not become truthy.
   const toggle = byKey.get('DebugFeatures');
@@ -240,6 +240,16 @@ test('DebugFeatures: the Diagnostics row\'s runtime gate', () => {
   assert.strictEqual(toggle.type, 'toggle');
   assert.strictEqual(toggle.defaultValue, false,
     'default OFF: a released app must not show a debug row unasked');
+
+  // The toggle reveals Diagnostics AND Test alarm (there is no compile flag for
+  // the latter any more), so the text must name both -- a toggle that mentions
+  // one row and produces two is exactly the "leaves the user hunting" failure
+  // the naming rationale in the spec exists to prevent.
+  const text = `${toggle.label} ${toggle.description}`;
+  assert.match(text, /Diagnostics/,
+    'the toggle must name the Diagnostics row it reveals');
+  assert.match(text, /Test alarm/,
+    'the toggle must name the Test alarm row it reveals');
 
   const off = buildDict({ AlarmList: { value: '07:50|1111111' },
                           DebugFeatures: { value: false } });

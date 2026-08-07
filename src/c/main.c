@@ -895,23 +895,28 @@ static int main_rows(void) {
     s_main_row_kinds[n++] = MAIN_ROW_ONGOING;
   }
   s_main_row_kinds[n++] = MAIN_ROW_LAST_NIGHT;
-#if SA_DEV_MENU
-  s_main_row_kinds[n++] = MAIN_ROW_TEST;
-#endif
-#if SA_DEBUG_DUMP
-  // RUNTIME-gated, unlike the Test alarm above: this is how an ordinary user
-  // produces a bug report after the public release, so it has to exist in a
-  // release build -- and a compile flag that nobody enforces is exactly what
-  // made "remember SA_DEV_MENU 0" a release hazard (backlog 13). Hidden unless
-  // the phone's Debugging toggle is on, so a default install never shows it.
+  // BOTH developer rows behind ONE runtime gate: the phone's Debugging toggle.
+  // Test alarm is a diagnostic too -- it exists to watch the alarm behave -- so
+  // hiding it with the same switch is what the toggle's name already promises,
+  // and a compile flag that nobody enforces is exactly what made "remember
+  // SA_DEV_MENU 0" a release hazard (backlog 13, now fully dissolved).
   //
-  // Test alarm deliberately stays compile-gated: it occupies a real alarm slot,
-  // and backlog 12 (a watch-created alarm is invisible and undeletable from the
-  // phone) would become a user-facing defect the moment real users can reach it.
+  // This is also how an ordinary user produces a bug report after the public
+  // release, so it has to exist in a release build; hidden unless the toggle is
+  // on, so a default install shows neither row.
+  //
+  // The backlog 12 objection to a user-reachable Test alarm (a watch-created
+  // alarm was invisible on the phone AND undeletable from either side) no longer
+  // holds: the alarm list's SELECT submenu turns a one-time alarm off, and
+  // ac_prune_spent_one_time drops it at the next launch.
   if (s_cfg.debug_features) {
+    s_main_row_kinds[n++] = MAIN_ROW_TEST;
+#if SA_DEBUG_DUMP
+    // Compile-gated as well, because unlike Test alarm this row needs debug_dump.c
+    // linked in -- with SA_DEBUG_DUMP 0 the row would be a button that does nothing.
     s_main_row_kinds[n++] = MAIN_ROW_DUMP;
-  }
 #endif
+  }
   return n;
 }
 

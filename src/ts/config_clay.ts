@@ -179,19 +179,25 @@ export function buildConfig(): any[] {
       + 'snoozes, so a half-asleep tap cannot end it by accident.' },
   ] });
 
-  // Runtime gate for the watch's Diagnostics row. Default OFF: a released app
-  // must not show a debug row unasked. "Debugging" names the area, "Diagnostics"
-  // names what the row produces -- both words come from the Pebble app's own
-  // vocabulary. Deliberately NOT called "Debug mode": nothing about the app
-  // behaves differently, one menu item appears.
+  // Runtime gate for BOTH of the watch's developer rows -- Diagnostics and Test
+  // alarm. Default OFF: a released app must not show a debug row unasked.
+  // "Debugging" names the area, the row names name the products -- all of that
+  // vocabulary comes from the Pebble app's own. Deliberately NOT called "Debug
+  // mode": nothing about the app behaves differently, two menu items appear.
+  // The label names both rows, because a toggle that mentions one and produces
+  // two leaves the user hunting for what changed.
   items.push({ type: 'section', items: [
     { type: 'heading', defaultValue: 'Debugging' },
     { type: 'toggle', messageKey: 'DebugFeatures',
-      label: 'Show the Diagnostics menu item',
+      label: 'Show the Diagnostics and Test alarm menu items',
       defaultValue: false, id: 'debug-features',
-      description: 'Adds a Diagnostics item to the app\'s menu on the watch. '
-                 + 'It writes a report of the last night to the Pebble log, so '
-                 + 'you can send it with a bug report. Takes a few seconds.' },
+      description: 'Adds two items to the app\'s menu on the watch. '
+                 + 'Diagnostics writes a report of the last night to the Pebble '
+                 + 'log, so you can send it with a bug report; it takes a few '
+                 + 'seconds. Test alarm adds a one-time alarm two minutes from '
+                 + 'now, to try out how the alarm behaves. A test alarm you no '
+                 + 'longer want can be switched off from the watch\'s own alarm '
+                 + 'list, after which the app drops it.' },
   ] });
 
   items.push({ type: 'submit', defaultValue: 'Save' });
