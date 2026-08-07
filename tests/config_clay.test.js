@@ -274,3 +274,14 @@ test('PreAlarmMin offers the pre-alarm screen lead, defaulting to an hour', () =
                           PreAlarmMin: { value: '0' } });
   assert.strictEqual(off.PreAlarmMin, 0);
 });
+
+test('the Clay snooze list matches the lengths the watch menu offers', () => {
+  const item = byKey.get('SnoozeMin');
+  assert.ok(item);
+  // Off, then exactly the SNOOZE_MENU_MIN list in src/c/main.c. The two places
+  // a snooze length is chosen must agree; they are kept in sync by hand, so
+  // this assertion is the thing that notices when they stop.
+  assert.deepStrictEqual(item.options.map((o) => o.value),
+                         ['0', '5', '10', '15', '20', '30', '45', '60']);
+  assert.strictEqual(item.defaultValue, '10');
+});

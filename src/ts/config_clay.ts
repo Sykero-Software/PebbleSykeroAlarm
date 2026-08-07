@@ -157,8 +157,9 @@ export function buildConfig(): any[] {
       defaultValue: '10', id: 'snooze-min',
       options: [
         { label: 'Off', value: '0' }, { label: '5 min', value: '5' },
-        { label: '9 min', value: '9' }, { label: '10 min', value: '10' },
-        { label: '15 min', value: '15' }, { label: '20 min', value: '20' },
+        { label: '10 min', value: '10' }, { label: '15 min', value: '15' },
+        { label: '20 min', value: '20' }, { label: '30 min', value: '30' },
+        { label: '45 min', value: '45' }, { label: '60 min', value: '60' },
       ] },
     { type: 'select', messageKey: 'SnoozeMax', label: 'Snoozes allowed',
       defaultValue: '5', id: 'snooze-max',

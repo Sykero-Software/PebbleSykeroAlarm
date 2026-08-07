@@ -87,7 +87,7 @@ typedef struct {
   uint8_t  sens_minutes;           // 1..5,   used when sensitivity == SENS_CUSTOM
   uint8_t  wake_profile;           // ESC_PROFILE_*
   EscParams esc;                   // used when wake_profile == ESC_PROFILE_CUSTOM
-  uint8_t  snooze_min;             // 1..30
+  uint8_t  snooze_min;             // 0..60 (0 == snoozing off)
   uint8_t  snooze_max;             // 0..20, 0 == unlimited
   uint16_t snooze_ramp_offset_s;   // seconds added to `elapsed` per snooze
   // Off by default: full-strength vibration from the first burst. See
