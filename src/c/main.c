@@ -389,6 +389,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   GET_INT(SnoozeMax, snooze_max);
   GET_INT(SnoozeRampOffsetS, snooze_ramp_offset_s);
   GET_BOOL(EscRampVib, esc_ramp_vib);
+  GET_BOOL(DebugFeatures, debug_features);
   if (changed) {
     as_save_config(&s_cfg);   // esc_clamp runs inside as_save_config
     APP_LOG(APP_LOG_LEVEL_INFO, "CFG updated: smart=%d win=%d sens=%d prof=%d",

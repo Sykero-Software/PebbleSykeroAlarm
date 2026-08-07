@@ -37,7 +37,16 @@
 // and a stale v1 blob would pass the length test and be read through the new
 // layout. The version is what discards it; the phone's launch handshake then
 // re-applies the user's real settings.
-#define CONFIG_VERSION    3
+//
+// Bumped 3 -> 4: Config gained debug_features. Same trap as the 1 -> 2 bump
+// below: a trailing bool lands in the struct's existing tail padding, so
+// sizeof(Config) is UNCHANGED and as_load_config's length check would accept a
+// stale v3 blob and read the new bool out of an uninitialised padding byte -- a
+// random value deciding whether a debug row appears. The version is what
+// discards it; the phone's launch handshake (CfgRequest) then re-applies the
+// user's real settings within seconds, and alarms are unaffected because they
+// live in PK_ALARMS/PK_ALARMSET, not here.
+#define CONFIG_VERSION    4
 // Bumped 1 -> 2: RunState gained served_slot/served_at, the record of which alarm
 // occurrence has already rung. sizeof(RunState) changes, so as_load_runstate's
 // length check would discard a stale blob on its own; the bump states the intent
@@ -74,6 +83,10 @@ typedef struct {
   // Off by default: full-strength vibration from the first burst. See
   // esc_flatten_ramp for why a gentle start is a hazard rather than a courtesy.
   bool     esc_ramp_vib;
+  // Reveals the watch's Diagnostics menu row. Off by default; a user turns it on
+  // from the phone only when producing a bug report. Runtime rather than a
+  // compile flag deliberately -- see debug_dump.h.
+  bool     debug_features;
 } Config;
 
 // Live state that must survive the app being killed or the watch rebooting.

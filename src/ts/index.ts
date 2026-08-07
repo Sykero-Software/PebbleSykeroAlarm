@@ -105,7 +105,7 @@ export const NUMERIC_KEYS = [
   'SnoozeMin', 'SnoozeMax', 'SnoozeRampOffsetS',
 ];
 
-export const BOOL_KEYS = ['SmartEnabled', 'EscRampVib'];
+export const BOOL_KEYS = ['SmartEnabled', 'EscRampVib', 'DebugFeatures'];
 
 export function buildDict(settings: any): any {
   const dict: any = {};

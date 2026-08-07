@@ -231,3 +231,23 @@ test('buildDict still reads legacy per-slot settings when there is no list value
   });
   assert.strictEqual(dict.AlarmSet, '06:45|1111100');
 });
+
+test('DebugFeatures: the Diagnostics row\'s runtime gate', () => {
+  // A toggle, so it must reach the watch as 1/0 through BOOL_KEYS. Clay hands DOM
+  // values back as strings, so a literal 'false' must not become truthy.
+  const toggle = byKey.get('DebugFeatures');
+  assert.ok(toggle, 'the config page must offer a DebugFeatures toggle');
+  assert.strictEqual(toggle.type, 'toggle');
+  assert.strictEqual(toggle.defaultValue, false,
+    'default OFF: a released app must not show a debug row unasked');
+
+  const off = buildDict({ AlarmList: { value: '07:50|1111111' },
+                          DebugFeatures: { value: false } });
+  assert.strictEqual(off.DebugFeatures, 0);
+  const on = buildDict({ AlarmList: { value: '07:50|1111111' },
+                         DebugFeatures: { value: true } });
+  assert.strictEqual(on.DebugFeatures, 1);
+  const str = buildDict({ AlarmList: { value: '07:50|1111111' },
+                          DebugFeatures: { value: 'false' } });
+  assert.strictEqual(str.DebugFeatures, 0, "the string 'false' must map to 0");
+});

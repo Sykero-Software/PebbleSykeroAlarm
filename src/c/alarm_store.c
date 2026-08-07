@@ -128,6 +128,7 @@ void as_load_config(Config *out) {
     // there for anyone who wants the old behaviour.
     out->snooze_ramp_offset_s = 0;
     out->esc_ramp_vib = false;   // explicit: the flattened vibration is the default
+    out->debug_features = false;   // explicit: a released app shows no debug row
   }
   esc_clamp(&out->esc);
 }

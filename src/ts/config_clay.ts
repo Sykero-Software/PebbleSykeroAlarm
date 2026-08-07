@@ -166,6 +166,21 @@ export function buildConfig(): any[] {
       + 'snoozes, so a half-asleep tap cannot end it by accident.' },
   ] });
 
+  // Runtime gate for the watch's Diagnostics row. Default OFF: a released app
+  // must not show a debug row unasked. "Debugging" names the area, "Diagnostics"
+  // names what the row produces -- both words come from the Pebble app's own
+  // vocabulary. Deliberately NOT called "Debug mode": nothing about the app
+  // behaves differently, one menu item appears.
+  items.push({ type: 'section', items: [
+    { type: 'heading', defaultValue: 'Debugging' },
+    { type: 'toggle', messageKey: 'DebugFeatures',
+      label: 'Show the Diagnostics menu item',
+      defaultValue: false, id: 'debug-features',
+      description: 'Adds a Diagnostics item to the app\'s menu on the watch. '
+                 + 'It writes a report of the last night to the Pebble log, so '
+                 + 'you can send it with a bug report. Takes a few seconds.' },
+  ] });
+
   items.push({ type: 'submit', defaultValue: 'Save' });
   return items;
 }
