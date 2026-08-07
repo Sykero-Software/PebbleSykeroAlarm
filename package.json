@@ -1,6 +1,6 @@
 {
   "name": "sykero-smart-alarm",
-  "author": "Syker\u00f6 Software",
+  "author": "Sykerö Software",
   "version": "1.1.0",
   "keywords": [
     "pebble-app"
@@ -10,7 +10,7 @@
     "pebble-clay": "^1.0.4"
   },
   "pebble": {
-    "displayName": "Smart Alarm",
+    "displayName": "Sykerö Alarm",
     "uuid": "cba6bb36-e731-46b3-b5c7-915a997b8c61",
     "sdkVersion": "3",
     "enableMultiJS": true,
@@ -20,7 +20,9 @@
       "emery",
       "flint"
     ],
-    "capabilities": [],
+    "capabilities": [
+      "health"
+    ],
     "watchapp": {
       "watchface": false
     },

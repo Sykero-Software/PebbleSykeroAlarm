@@ -75,7 +75,13 @@ night rather than from illustrative data.
   wakeup service below `RunLevel_Normal`/`Stationary`, and every alarm this app
   schedules is a wakeup; the *built-in* alarm service is explicitly enabled at
   `RunLevel_LowPower` and a third-party app cannot be. Keep the watch charged.
-- Target platforms: aplite, basalt, diorite, emery, flint.
+- Target platforms: basalt, diorite, emery, flint. **aplite** is out because that
+  generation has no Health API for the smart alarm to read (and its inbox had
+  fallen to 644 B against a 414 B worst case). **chalk** (Pebble Time Round) is
+  out because the round display clips the left edge of every screen this app
+  draws — the title, the alarm times and the whole "Last night" text — which is
+  per-platform layout work nobody has done or tested (checked on the emulator
+  2026-08-07). **gabbro** is untried.
 
 Developed as a submodule of the private `pebble-timetracking` superrepo,
 alongside the other Sykerö Pebble apps (TimeStyle, Track Work Time, MIDI
