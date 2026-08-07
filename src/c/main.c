@@ -856,6 +856,7 @@ static void open_last_night(void) {
 // s_wait_window) and costs nothing.
 #define PENDING_WAITING 0
 #define PENDING_SNOOZED 1
+#define PENDING_PREALARM 2
 static void open_pending_window(int mode);
 
 // The live cycle, as the menu sees it. One call, so every row and caption in
@@ -1072,9 +1073,12 @@ static void main_window_unload(Window *w) {
 // and SELECT inert -- so the difference is the caption, not a second window.
 // aplite has ~2.1 KB of app heap free; a duplicate Window plus four TextLayers
 // that can never be on-stack at the same time as the original is not worth it
-// there. The window itself lives in the smart-window section below.
+// there. The window itself lives in the smart-window section below. A third
+// mode, PENDING_PREALARM, shares the same window and the same button contract
+// too -- it is waiting for an alarm that has not reached its smart window yet.
 #define PENDING_WAITING 0
 #define PENDING_SNOOZED 1
+#define PENDING_PREALARM 2
 static void open_pending_window(int mode);
 // A tentative definition, so start_ring (~700 lines above the smart-window
 // section's own statics) can check it too, to hand the pending screen back
@@ -1763,6 +1767,17 @@ static void start_ring(int slot, bool from_deadline) {
 
 static Window    *s_wait_window;
 static int        s_pending_mode;   // PENDING_WAITING / PENDING_SNOOZED
+// THE PRE-ALARM SCREEN CARRIES ITS OWN SLOT, because it deliberately does NOT
+// begin a cycle. runstate_begin_cycle sets window_started_at, which every
+// consumer reads as "the smart window is open": poll_cb would start reading
+// minute history and evaluating sleep an hour early, sc_rearm would arm the
+// rolling re-entry, and ac_cycle_state would be asked to validate a cycle that
+// does not exist. So RunState is untouched and these two fields are the whole
+// state of this screen -- which also means it does not survive the app being
+// killed, and nothing tries to revive it. The smart window and the ring bring
+// the app back exactly as they always did.
+static int8_t s_pre_slot = -1;      // -1 when no pre-alarm screen is live
+static time_t s_pre_deadline;       // the RING instant of that occurrence
 static TextLayer *s_wait_keys;        // the two-line "how to get out" legend
 static AppTimer  *s_wait_hint_timer;
 static TextLayer *s_wait_time;
@@ -1805,7 +1820,13 @@ static void wait_window_update(void) {
 
   time_t deadline = (time_t)s_rs.deadline_at;
   struct tm *dtm = localtime(&deadline);
-  if (s_pending_mode == PENDING_SNOOZED) {
+  if (s_pending_mode == PENDING_PREALARM) {
+    // No cycle, so the alarm time comes from this screen's own record rather
+    // than from RunState.deadline_at (which is 0 until a window opens).
+    struct tm *ptm = localtime(&s_pre_deadline);
+    snprintf(sub, sizeof(sub), "Alarm %02d:%02d\nWaiting for alarm",
+             ptm->tm_hour, ptm->tm_min);
+  } else if (s_pending_mode == PENDING_SNOOZED) {
     // ring_started_at holds the snooze EXPIRY while one is in flight. An
     // absolute time, matching "Alarm 07:50" on the other mode -- the running
     // clock right above it supplies the delta.
@@ -1914,10 +1935,15 @@ static void wait_show_hint(const char *msg) {
 // (this one, the 03:00 clock check, a phone config save) would pick today's
 // occurrence straight back up and the window would reopen minutes later. Read
 // deadline_at BEFORE runstate_end_cycle clears it.
-static void wait_cancel_now(void) {
-  int slot = s_rs.pending_slot;
-  time_t deadline = (time_t)s_rs.deadline_at;
+// Correct unchanged in PENDING_PREALARM, where there is no cycle to end:
+// runstate_end_cycle on an already-empty cycle is a no-op, and the served
+// stamp is the same pair open_smart_window would have written -- the RING
+// deadline, which is what ac_is_served compares against after subtracting
+// lead_s. So cancelling from this screen and cancelling from the waiting
+// screen are indistinguishable to every later re-arm.
+static void wait_cancel_now(int slot, time_t deadline) {
   APP_LOG(APP_LOG_LEVEL_INFO, "%s cancel slot=%d deadline=%lu",
+          s_pending_mode == PENDING_PREALARM ? "PREALARM" :
           s_pending_mode == PENDING_SNOOZED ? "SNOOZE" : "WAIT",
           slot, (unsigned long)deadline);
   if (slot >= 0 && slot < MAX_ALARMS) {
@@ -1940,7 +1966,15 @@ static void wait_cancel_now(void) {
 
 static void wait_down_multi(ClickRecognizerRef rec, void *ctx) {
   if (click_number_of_clicks_counted(rec) >= STOP_PRESSES) {
-    wait_cancel_now();
+    if (s_pending_mode == PENDING_PREALARM) {
+      int slot = s_pre_slot;
+      time_t deadline = s_pre_deadline;
+      s_pre_slot = -1;
+      s_pre_deadline = 0;
+      wait_cancel_now(slot, deadline);
+    } else {
+      wait_cancel_now(s_rs.pending_slot, (time_t)s_rs.deadline_at);
+    }
   } else {
     wait_show_hint("Press 2x to cancel the alarm");
   }
@@ -1956,7 +1990,20 @@ static void wait_down_multi(ClickRecognizerRef rec, void *ctx) {
 // gets you out for good -- that is DOWN.
 static void wait_back_multi(ClickRecognizerRef rec, void *ctx) {
   if (click_number_of_clicks_counted(rec) >= STOP_PRESSES) {
-    APP_LOG(APP_LOG_LEVEL_INFO, "WAIT -> watchface (window stays open)");
+    if (s_pending_mode == PENDING_PREALARM) {
+      // NOTHING IS BEING MONITORED HERE, so unlike the smart window's screen
+      // this one does not come back: no re-entry wakeup was ever armed for it
+      // (see the WC_PREALARM handler), and BACK 2x therefore means "leave me
+      // alone until the alarm is actually near". The alternative -- reviving it
+      // every SC_REENTRY_GAP_S for up to 90 minutes -- would be the app shoving
+      // itself in front of the user roughly 30 times for no reason. The alarm
+      // itself is untouched: its WC_DEADLINE and any WC_WINDOW are still armed.
+      s_pre_slot = -1;
+      s_pre_deadline = 0;
+      APP_LOG(APP_LOG_LEVEL_INFO, "PREALARM -> watchface (alarm stays armed)");
+    } else {
+      APP_LOG(APP_LOG_LEVEL_INFO, "WAIT -> watchface (window stays open)");
+    }
     close_to_watchface();
   } else {
     wait_show_hint("Press 2x for the watchface");
@@ -2000,6 +2047,13 @@ static void wait_win_disappear(Window *w) {
 // snoozed) free of any stack manipulation.
 static void open_pending_window(int mode) {
   s_pending_mode = mode;
+  if (mode != PENDING_PREALARM) {
+    // The smart window opening, or a snooze starting, takes the screen over --
+    // the pre-alarm record must not outlive the mode that owns it, or a later
+    // cancel could stamp an occurrence this screen is no longer about.
+    s_pre_slot = -1;
+    s_pre_deadline = 0;
+  }
   if (!s_wait_window) {
     s_wait_window = window_create();
     window_set_window_handlers(s_wait_window, (WindowHandlers){
@@ -2286,6 +2340,12 @@ static void open_smart_window(int slot, time_t window_start, time_t deadline) {
 // missed is how a screen got stranded in the first place). That is now
 // AcWindowDecision.abandon_screen, derived once in ac_window_wakeup.
 static void abandon_waiting_screen(void) {
+  // The pre-alarm screen has NO CYCLE BY DESIGN, so "the cycle is dead" says
+  // nothing about it. Without this guard the next WC_WINDOW/WC_REENTRY that
+  // found nothing live would close a screen that is doing exactly its job.
+  if (s_pending_mode == PENDING_PREALARM) {
+    return;
+  }
   if (s_poll_timer) {
     app_timer_cancel(s_poll_timer);
     s_poll_timer = NULL;
@@ -2437,6 +2497,34 @@ static void handle_wakeup_cookie(int32_t cookie) {
         break;
       }
       sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, now, s_ringing);
+      break;
+    }
+    case WC_PREALARM: {
+      // Put the pending screen up for the alarm we are counting down to. This
+      // begins NO cycle, arms NO re-entry and re-arms nothing: a fired wakeup
+      // is consumed one-shot and every other wakeup this alarm needs
+      // (WC_DEADLINE, and WC_WINDOW if the smart window is on) is still
+      // scheduled from the last sc_rearm.
+      time_t now2 = time(NULL);
+      if (s_ringing || ac_snooze_pending(s_rs.snooze_count, s_rs.ring_started_at, now2)
+          || s_rs.window_started_at != 0) {
+        // Something with a stronger claim already owns the screen: a ring, a
+        // snooze, or an open smart window. Each of those is ABOUT this alarm or
+        // a nearer one, and each already offers the same DOWN 2x cancel.
+        APP_LOG(APP_LOG_LEVEL_INFO, "PREALARM declined: cycle/ring/snooze live");
+        break;
+      }
+      time_t when = 0;
+      int slot = sc_next_unserved(s_alarms, s_count, &s_cfg, &s_rs, now2, &when);
+      if (slot < 0) {
+        APP_LOG(APP_LOG_LEVEL_INFO, "PREALARM: no unserved alarm ahead");
+        break;
+      }
+      s_pre_slot = (int8_t)slot;
+      s_pre_deadline = sc_ring_deadline(&s_cfg, when);
+      APP_LOG(APP_LOG_LEVEL_INFO, "PREALARM screen for slot=%d ring=%lu",
+              slot, (unsigned long)s_pre_deadline);
+      open_pending_window(PENDING_PREALARM);
       break;
     }
     case WC_DST:
