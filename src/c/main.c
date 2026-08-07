@@ -2831,6 +2831,44 @@ int main(void) {
     as_save_alarms(s_alarms, s_count);
   }
 
+#ifdef SCREENSHOT_FIXTURES
+  // Appstore screenshots only, and ONLY under the SCREENSHOT_FIXTURES env flag
+  // (see wscript). "Last night" is computed from health minute history, which a
+  // headless emulator does not have, so the screen otherwise shows nothing but
+  // its empty state. Seed three nights -- the real 2026-08-06 night and two
+  // older ones -- so the summary, the sensitivity table and the "Earlier nights"
+  // block all render. `pebble publish` runs its own build with no such env var,
+  // so none of this can reach a released bundle; verify with
+  //   grep -ac "Woke you at" build/emery/pebble-app.elf
+  // after a plain `pebble build`.
+  {
+    NightSummary probe;
+    if (as_load_nights(&probe, 1) == 0) {           // never stack demo on demo
+      NightSummary n;
+      memset(&n, 0, sizeof(n));
+      n.onset_min        = 23 * 60 + 50;
+      n.baseline         = 46;
+      n.trigger_level    = 354;
+      n.acc_at_fire      = 800;
+      n.percentile       = 90;
+      n.alt_percentile[0] = 95; n.alt_fired_min[0] = NIGHT_NO_FIRE;
+      n.alt_percentile[1] = 90; n.alt_fired_min[1] = 7 * 60 + 51;
+      n.alt_percentile[2] = 82; n.alt_fired_min[2] = 7 * 60 + 37;
+      n.alt_percentile[3] = 75; n.alt_fired_min[3] = 7 * 60 + 33;
+      // Oldest first: as_push_night is newest-first, so the last one pushed is
+      // the one the screen glances at.
+      uint32_t today = (uint32_t)(time(NULL) / SECONDS_PER_DAY);
+      n.day_local = today - 2; n.fired_min = 7 * 60 + 56; as_push_night(&n);
+      n.day_local = today - 1; n.fired_min = 7 * 60 +  0;
+      n.fired_by_deadline = 1;                       // a quiet night, deadline rang
+      as_push_night(&n);
+      n.day_local = today;     n.fired_min = 7 * 60 + 51;
+      n.fired_by_deadline = 0;
+      as_push_night(&n);
+    }
+  }
+#endif
+
   // Drop spent one-time alarms -- a one-time alarm switched off has no future, and
   // nothing could delete the row: the watch has no delete, and the phone cannot
   // remove a slot the watch's own Test alarm created without telling it (its next
