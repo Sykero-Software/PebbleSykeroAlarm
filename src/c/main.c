@@ -6,6 +6,7 @@
 #include "debug_dump.h"
 #include "escalation.h"
 #include "health_read.h"
+#include "night_text.h"
 #include "scheduler.h"
 #include "sleep_eval.h"
 
@@ -766,86 +767,21 @@ static void open_alarm_list(void) {
 static Window      *s_night_window;
 static ScrollLayer *s_night_scroll;
 static TextLayer   *s_night_text;
-static char         s_night_buf[640];
-
-static void fmt_hhmm(uint16_t minute_of_day, char *out, size_t n) {
-  if (minute_of_day == NIGHT_NO_FIRE) {
-    snprintf(out, n, "--:--");
-  } else {
-    snprintf(out, n, "%02d:%02d", minute_of_day / 60, minute_of_day % 60);
-  }
-}
-
-// Appends a formatted chunk to s_night_buf at `off`, then clamps `off` so it
-// can never run past sizeof(s_night_buf) even if NIGHT_HISTORY grows enough
-// to make the worst case exceed the buffer -- today's worst case (~350 B
-// against 640) can't reach it, but the bare `off += snprintf(...)`
-// accumulation this replaces would otherwise silently walk s_night_buf + off
-// out of bounds if it ever did. vsnprintf is blocked on this SDK
-// (pebble_warn_unsupported_functions.h), so this stays a macro around
-// snprintf rather than a va_list helper.
-#define NIGHT_APPEND(...) do { \
-    off += (size_t)snprintf(s_night_buf + off, sizeof(s_night_buf) - off, __VA_ARGS__); \
-    if (off > sizeof(s_night_buf)) { off = sizeof(s_night_buf); } \
-  } while (0)
-
-static void build_night_text(void) {
-  // static, not a local: NIGHT_HISTORY(7) * sizeof(NightSummary)(32) = 224
-  // bytes against the ~2 KB app stack -- squarely the "couple hundred bytes"
-  // class that produced App fault! PC:0 LR:0 on hardware in the sibling apps.
-  // build_night_text runs from a single window-load callback (single-threaded
-  // event loop), so a non-reentrant buffer is safe, same as as_push_night's.
-  static NightSummary ns[NIGHT_HISTORY];
-  int n = as_load_nights(ns, NIGHT_HISTORY);
-  size_t off = 0;
-  s_night_buf[0] = '\0';
-  if (n == 0) {
-    snprintf(s_night_buf, sizeof(s_night_buf),
-             "No nights recorded yet.\n\nThe summary appears after the first "
-             "alarm with the smart alarm on.");
-    return;
-  }
-  const NightSummary *t = &ns[0];
-  char onset[8], fired[8];
-  fmt_hhmm(t->onset_min, onset, sizeof(onset));
-  fmt_hhmm(t->fired_min, fired, sizeof(fired));
-
-  if (t->smart_unavailable) {
-    NIGHT_APPEND(
-        "Last night\n\nSmart alarm was unavailable.\nCheck that activity "
-        "tracking is on in the watch settings.\n");
-  } else {
-    // fired_min is ALWAYS the real ring instant (never NIGHT_NO_FIRE); which
-    // label applies is carried separately in fired_by_deadline, so this never
-    // renders as a label with a blank time.
-    NIGHT_APPEND(
-        "Last night\n\nAsleep from %s\nBaseline %u\nLevel %u\n%s %s\n",
-        onset, t->baseline, t->trigger_level,
-        t->fired_by_deadline ? "Deadline at" : "Woke you at", fired);
-    NIGHT_APPEND("\nAt other sensitivities:\n");
-    for (int k = 0; k < NIGHT_ALT_COUNT; k++) {
-      char at[8];
-      fmt_hhmm(t->alt_fired_min[k], at, sizeof(at));
-      NIGHT_APPEND("  P%-2u  %s%s\n", t->alt_percentile[k], at,
-          t->alt_percentile[k] == t->percentile ? "  <- in use" : "");
-    }
-  }
-  if (n > 1) {
-    NIGHT_APPEND("\nEarlier:\n");
-    for (int i = 1; i < n; i++) {
-      char at[8];
-      fmt_hhmm(ns[i].fired_min, at, sizeof(at));
-      NIGHT_APPEND("  %s  %s\n", at,
-          ns[i].smart_unavailable ? "unavailable"
-        : ns[i].fired_by_deadline ? "deadline" : "smart");
-    }
-  }
-}
+static char         s_night_head[128];
+static char         s_night_buf[1024];   // grown: the explanation block is new
 
 static void night_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
-  build_night_text();
+  // static, not a local: NIGHT_HISTORY(7) * sizeof(NightSummary)(32) = 224
+  // bytes against the ~2 KB app stack -- squarely the "couple hundred bytes"
+  // class that produced App fault! PC:0 LR:0 on hardware in the sibling apps.
+  // night_window_load runs from a single window-load callback (single-threaded
+  // event loop), so a non-reentrant buffer is safe, same as as_push_night's.
+  static NightSummary ns[NIGHT_HISTORY];
+  int n = as_load_nights(ns, NIGHT_HISTORY);
+  nt_build(ns, n, s_night_head, sizeof(s_night_head),
+           s_night_buf, sizeof(s_night_buf));
 
   s_night_scroll = scroll_layer_create(b);
   scroll_layer_set_click_config_onto_window(s_night_scroll, w);
