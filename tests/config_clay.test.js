@@ -296,26 +296,32 @@ test('the Clay snooze list matches the lengths the watch menu offers', () => {
   assert.strictEqual(item.defaultValue, '10');
 });
 
-test('the config page points at how-it-works, as a real link and as a typeable URL', () => {
+test('the config page links how-it-works from its first text block', () => {
   // The doc is the only place the smart alarm's behaviour is explained in full,
-  // and a user who never learns it exists will read the sensitivity slider as a
+  // and a user who never learns it exists will read the sensitivity choice as a
   // guess. So the FIRST text block on the page has to name it.
-  //
-  // Belt and braces on the URL: the config page is a data:text/html URL in the
-  // Core app, where an <a> tap is not guaranteed to reach a browser (the same
-  // context that disables localStorage). If the anchor is inert the bare URL
-  // next to it is still readable, so the reference cannot become a dead end.
-  const intro = allItems(buildConfig()).find(
-    (i) => i.type === 'text' && String(i.defaultValue).indexOf(HOW_IT_WORKS_URL) >= 0);
-  assert.ok(intro, 'no text item links to how-it-works');
+  const texts = allItems(buildConfig()).filter((i) => i.type === 'text');
+  const intro = texts[0];
+  assert.ok(String(intro.defaultValue).indexOf(HOW_IT_WORKS_URL) >= 0,
+            'the first text block must link how-it-works');
 
   const html = String(intro.defaultValue);
   assert.ok(html.indexOf('href="' + HOW_IT_WORKS_URL + '"') >= 0,
             'the URL must appear as a real anchor href');
-  assert.ok(html.indexOf('>' + HOW_IT_WORKS_URL + '<') >= 0
-            || html.indexOf(HOW_IT_WORKS_URL + ' ') >= 0
-            || html.replace(/<[^>]*>/g, '').indexOf(HOW_IT_WORKS_URL) >= 0,
-            'the URL must ALSO be visible as plain text, for when the tap is inert');
+
+  // target=_blank is markup hygiene, NOT a working protection: the Core app
+  // ignores it and navigates this same webview to the doc either way (both
+  // variants tried on a real phone, 2026-08-07). Asserted only so the attribute
+  // is not dropped by accident -- never rely on it to keep the Save button alive.
+  assert.ok(/target="_blank"/.test(html),
+            'keep target=_blank for hosts that honour it');
+
+  // An anchor and nothing else. Tapping it DOES open the browser on a real Core
+  // Devices phone (verified 2026-08-07), so the bare URL this once carried as a
+  // fallback is redundant -- and a naked 86-character URL is what forced the
+  // word-break workaround that is now gone with it.
+  assert.strictEqual(html.replace(/<[^>]*>/g, '').indexOf(HOW_IT_WORKS_URL), -1,
+                     'the URL must not also be printed as visible text');
 
   // English only. how-it-works.fi.md exists but is the maintainer's own extra;
   // the doc itself links to it, so the app must not fork the reference.

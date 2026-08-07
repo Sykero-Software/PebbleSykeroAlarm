@@ -19,18 +19,25 @@ export function buildConfig(): any[] {
                   + 'occurrence.'
                   // The settings below only make sense once you know what the
                   // alarm measures -- the sensitivity choice in particular is a
-                  // guess without it. Both a link and the bare URL: this page is
-                  // a data:text/html URL in the Core app, where a tap is not
-                  // guaranteed to reach a browser, and an inert anchor with no
-                  // visible address would be a dead end.
-                  + '<br><br>New here? <a href="' + HOW_IT_WORKS_URL + '">How it '
+                  // guess without it.
+                  //
+                  // All VERIFIED on a real Core Devices phone, 2026-08-07:
+                  //  - the tap DOES open the doc, even though this page is
+                  //    served as a data:text/html URL. The context that disables
+                  //    localStorage does not block link navigation, so no
+                  //    bare-URL fallback is needed.
+                  //  - it opens IN THIS SAME WEBVIEW, and `target="_blank"` made
+                  //    no difference whatsoever -- the Core app ignores it. The
+                  //    attribute stays as correct markup for a host that honours
+                  //    it, but do not treat it as a guarantee that the settings
+                  //    page survives the tap; it is not one.
+                  //  - in practice this is fine (maintainer's own verdict):
+                  //    reading the doc and coming back works.
+                  + '<br><br>New here? <a href="' + HOW_IT_WORKS_URL + '"'
+                  + ' target="_blank" rel="noopener noreferrer">How it '
                   + 'works</a> explains what the watch measures, how it decides '
                   + 'when to wake you, and what each setting below actually '
-                  + 'changes.<br>'
-                  // word-break, or the 86-character unbreakable URL widens the
-                  // page and the whole config scrolls sideways on a phone.
-                  + '<span style="word-break:break-all">' + HOW_IT_WORKS_URL
-                  + '</span>',
+                  + 'changes.',
     },
   ];
 
