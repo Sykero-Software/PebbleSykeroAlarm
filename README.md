@@ -96,9 +96,11 @@ contract and Clay config) **and** every host-side C test suite
 `sleep_eval` and the phone↔watch pack contract) — no Pebble SDK or emulator
 needed for either.
 
-> The **Test alarm** and **Dump last night** rows are development-build only
-> (`SA_DEV_MENU` in `src/c/debug_dump.h`); a release build is compiled with
-> `SA_DEV_MENU 0` and shows neither.
+> The **Test alarm** row is development-build only (`SA_DEV_MENU` in
+> `src/c/debug_dump.h`); a release build is compiled with `SA_DEV_MENU 0` and
+> does not show it. The **Diagnostics** row ships in every build and is
+> revealed at runtime by a phone-side "Debugging" toggle — see "Sending a
+> diagnostic report" below.
 
 ## Design docs
 
@@ -128,7 +130,9 @@ watch and photograph the screen instead; it carries the numbers that matter most
 5. `pebble logs --cloudpebble`
 6. On the watch, open **Smart Alarm → Diagnostics**. Leave the app open for about ten
    seconds; the report is written in small bursts.
-7. Copy every line beginning with `DBG` from the terminal and attach it to your report.
+7. Copy everything from `DBG ---- dump begin ----` to `DBG ---- dump end ----` from
+   the terminal and attach it to your report. `pebble logs` prefixes every line with a
+   timestamp and source location, so a line does not begin with `DBG` — it contains it.
 
 **Run it the same morning.** The minute-by-minute movement data covers only the night
 around the alarm that rang most recently, and it is not stored — the watch re-reads it

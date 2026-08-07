@@ -2646,7 +2646,7 @@ int main(void) {
   // The dump is no longer run at launch: measured on the watch it held the event
   // loop for 1.5-4 s right after start-up, which read as the app being stuck.
   // It is a menu action now (MAIN_ROW_DUMP), so the data is still one press away
-  // on a development build and costs a shipped app nothing.
+  // and costs a shipped app nothing when the row is off.
 
   app_event_loop();
 

@@ -66,6 +66,7 @@ void nt_build(const NightSummary *nights, int count,
     APPEND(body, body_len, bo, "Stir needed  %u\nYou at rest  %u\n",
            (unsigned)t->trigger_level, (unsigned)t->baseline);
     APPEND(body, body_len, bo, "\nAt other sensitivities:\n");
+    bool matched = false;
     for (int k = 0; k < NIGHT_ALT_COUNT; k++) {
       char at[8];
       fmt_hhmm(t->alt_fired_min[k], at, sizeof(at));
@@ -78,6 +79,18 @@ void nt_build(const NightSummary *nights, int count,
              nt_sens_name(t->alt_percentile[k]),
              (unsigned)t->alt_percentile[k], at,
              t->alt_percentile[k] == t->percentile ? " *" : "");
+      if (t->alt_percentile[k] == t->percentile) {
+        matched = true;
+      }
+    }
+    // A Custom setting away from the four named alternatives (e.g. 88) matches
+    // none of the rows above, so the marker never appears and the screen would
+    // silently fail to say what it is actually helping the user tune. Naming
+    // it here, right after the table, keeps the reader in the same place they
+    // were already looking rather than sending them hunting for it elsewhere.
+    if (!matched) {
+      APPEND(body, body_len, bo, "In use: %s (%u%%)\n",
+             nt_sens_name(t->percentile), (unsigned)t->percentile);
     }
   }
 
@@ -96,16 +109,22 @@ void nt_build(const NightSummary *nights, int count,
   // glance -- and it is not optional: the percentile runs OPPOSITE to the
   // sensitivity, so a user reading "Low (95%)" without this would reasonably
   // conclude the opposite of the truth. ASCII only (Gothic has no en dash).
-  APPEND(body, body_len, bo,
-         "\nWhat this means\n"
-         "The alarm watches how much you move and rings at a light moment "
-         "inside your window. \"Stir needed\" comes from your own night: the "
-         "more still you sleep, the lower it is.\n\n"
-         "The number is the same one as the Custom setting on your phone. A "
-         "HIGHER number means it takes a BIGGER stir to wake you, so Low (95%%) "
-         "wakes you least eagerly.\n\n"
-         "The list shows when each sensitivity would have rung. Woke you too "
-         "early? Choose Low. Rang at your set time having missed a good moment? "
-         "Choose High. You change it in the app's settings on your phone. "
-         "--:-- means that setting would not have rung early at all.\n");
+  //
+  // Guarded on smart_unavailable: that path never built a sensitivity table
+  // (there is nothing to rank a night that was never judged), so following it
+  // with "the list shows..." would describe a list that isn't on the screen.
+  if (!t->smart_unavailable) {
+    APPEND(body, body_len, bo,
+           "\nWhat this means\n"
+           "The alarm watches how much you move and rings at a light moment "
+           "inside your window. \"Stir needed\" comes from your own night: the "
+           "more still you sleep, the lower it is.\n\n"
+           "The number is the same one as the Custom setting on your phone. A "
+           "HIGHER number means it takes a BIGGER stir to wake you, so Low (95%%) "
+           "wakes you least eagerly. The * marks the sensitivity you use now.\n\n"
+           "The list shows when each sensitivity would have rung. Woke you too "
+           "early? Choose Low. Rang at your set time having missed a good moment? "
+           "Choose High. You change it in the app's settings on your phone. "
+           "--:-- means that setting had not rung by the time the alarm did.\n");
+  }
 }

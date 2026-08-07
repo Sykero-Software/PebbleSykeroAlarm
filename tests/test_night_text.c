@@ -59,21 +59,41 @@ int main(void) {
     assert(strstr(body, "P95") == NULL);
     assert(strstr(body, "Highest") == NULL);   // no invented setting name
 
-    // The sensitivity in use is marked, exactly once.
+    // The sensitivity in use is marked, exactly once within the table (the
+    // explanation below also contains a '*', in the legend sentence, so the
+    // search is bounded to the table region rather than the whole body).
+    const char *table_start = strstr(body, "At other sensitivities:");
+    const char *table_end = strstr(body, "What this means");
+    assert(table_start != NULL && table_end != NULL && table_end > table_start);
     const char *first = strstr(body, "Medium (90%)");
-    assert(first != NULL);
+    assert(first != NULL && first < table_end);
     const char *star = strchr(first, '*');
-    assert(star != NULL);
-    assert(strchr(star + 1, '*') == NULL);
+    assert(star != NULL && star < table_end);
+    const char *star2 = strchr(star + 1, '*');
+    assert(star2 == NULL || star2 >= table_end);
 
-    // A setting that would not have rung early reads as --:--.
+    // A setting that had not rung by the time the alarm did reads as --:--.
     assert(strstr(body, "--:--") != NULL);
+    // The old wording claimed such a setting "would not have rung early at
+    // all" -- false on an early smart wake, since alt sensitivities are only
+    // evaluated up to the moment the alarm actually rang (hr_read_night stops
+    // at `now`), not over the whole window. A less eager setting could well
+    // have fired later and still been early.
+    assert(strstr(body, "would not have rung early at all") == NULL);
+    assert(strstr(body, "had not rung by the time the alarm did") != NULL);
 
     // The explanation, and the inversion stated explicitly.
     assert(strstr(body, "What this means") != NULL);
     assert(strstr(body, "higher") != NULL || strstr(body, "HIGHER") != NULL);
     assert(strstr(body, "Low") != NULL);
     assert(strstr(body, "phone") != NULL);
+
+    // The marker is legended, so "*" is not left unexplained.
+    assert(strstr(body, "The * marks the sensitivity you use now.") != NULL);
+
+    // This night's percentile (90) matches the "Medium" alt row, so no extra
+    // "In use" line is needed -- the table's marker already says it.
+    assert(strstr(body, "In use:") == NULL);
 
     // ASCII only -- Gothic renders anything else as a tofu box.
     for (const char *p = body; *p; p++) { assert((unsigned char)*p < 0x80); }
@@ -103,6 +123,27 @@ int main(void) {
     nt_build(&n, 1, head, sizeof(head), body, sizeof(body));
     assert(strstr(body, "unavailable") != NULL);
     assert(strstr(body, "Custom (75%)") == NULL);   // no table to show
+    // The explanation talks about a sensitivity list and a marker that were
+    // never printed on this path -- it must not follow a table that isn't there.
+    assert(strstr(body, "What this means") == NULL);
+    assert(strstr(body, "In use:") == NULL);
+  }
+
+  // --- a Custom percentile matching none of the four named alternatives ----
+  {
+    NightSummary n = night_0806();
+    n.percentile = 88;   // between High (82) and Medium (90); no table row is 88
+    nt_build(&n, 1, head, sizeof(head), body, sizeof(body));
+    // Every table row prints unmarked -- none of the four alternatives is 88 --
+    // and none of the marked variants appear.
+    assert(strstr(body, "Low (95%)  --:--\n") != NULL);
+    assert(strstr(body, "Medium (90%)  07:51\n") != NULL);
+    assert(strstr(body, "High (82%)  07:51\n") != NULL);
+    assert(strstr(body, "Custom (75%)  07:51\n") != NULL);
+    assert(strstr(body, "07:51 *") == NULL);
+    // ...but the screen still states the setting it is helping the user tune,
+    // by name and number, so the reader is never left without an answer.
+    assert(strstr(body, "In use: Custom (88%)") != NULL);
   }
 
   // --- earlier nights ------------------------------------------------------

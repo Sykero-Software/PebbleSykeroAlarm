@@ -4,6 +4,9 @@
 #include "alarm_store.h"
 #include "sleep_eval.h"
 
+// Must stay 1 in any build shipped with the phone's Debugging toggle: that
+// toggle only reveals the Diagnostics menu row, it does not compile the dump
+// in -- with this at 0 the toggle would show, and do nothing.
 #define SA_DEBUG_DUMP 1
 
 // Development-build rows in the main menu. As of 2026-08-06 this gates ONLY
