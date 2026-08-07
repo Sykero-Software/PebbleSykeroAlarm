@@ -145,6 +145,17 @@ time_t ac_window_start(uint8_t semantics, bool smart_window_active,
   return ring - (time_t)window_min * 60;
 }
 
+time_t ac_prealarm_start(time_t alarm_time, uint16_t pre_min, time_t window_start) {
+  if (pre_min == 0) {
+    return 0;
+  }
+  time_t pre = alarm_time - (time_t)pre_min * 60;
+  if (pre >= window_start) {
+    return 0;   // the smart window's screen is up by then; nothing to add
+  }
+  return pre;
+}
+
 bool ac_is_served(time_t when, int slot, int served_slot, time_t served_at,
                   int32_t lead_s) {
   return served_slot >= 0 && slot == served_slot && when != 0

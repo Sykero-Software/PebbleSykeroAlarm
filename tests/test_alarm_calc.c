@@ -1367,6 +1367,44 @@ int main(void) {
            == at(2026, 8, 6, 7, 50));
   }
 
+  // --- ac_prealarm_start ----------------------------------------------------
+  // The pre-alarm waiting screen: it opens `pre_min` before the ALARM TIME, and
+  // only when that is genuinely earlier than the smart window's own screen.
+  printf("--- ac_prealarm_start ---\n");
+  {
+    const time_t T = 1000000;
+
+    // Off: the feature is disabled, whatever the window does.
+    assert(ac_prealarm_start(T, 0, T - 30 * 60) == 0);
+
+    // The ordinary case: a 60-minute lead against a 30-minute window opens the
+    // screen half an hour before the window would have.
+    assert(ac_prealarm_start(T, 60, T - 30 * 60) == T - 60 * 60);
+
+    // Lead SHORTER than the window: the smart window's screen is already up by
+    // then, so a second wakeup would add nothing.
+    assert(ac_prealarm_start(T, 15, T - 30 * 60) == 0);
+
+    // Lead EXACTLY the window start: not strictly earlier, so still nothing.
+    assert(ac_prealarm_start(T, 30, T - 30 * 60) == 0);
+
+    // No smart window at all (smart off, or a platform with no Health API):
+    // ac_window_start collapses onto the ring deadline, so any positive lead
+    // qualifies and this screen is the ONLY one the user gets before the ring.
+    assert(ac_prealarm_start(T, 60, T) == T - 60 * 60);
+
+    // SEMANTICS_RING_FROM: the window runs [T, T+w], so window_start IS the
+    // alarm time and every positive lead is earlier than it. This is the mode
+    // the user actually runs, and it is why the lead is anchored on the alarm
+    // time rather than on the ring deadline (which sits AFTER T here).
+    assert(ac_prealarm_start(T, 90, T) == T - 90 * 60);
+
+    // The maximum the config offers, and a one-minute lead, both plain.
+    assert(ac_prealarm_start(T, 90, T - 60 * 60) == T - 90 * 60);
+    assert(ac_prealarm_start(T, 1, T) == T - 60);
+  }
+  printf("  ac_prealarm_start: ok\n");
+
   printf("test_alarm_calc: all assertions passed\n");
   return 0;
 }

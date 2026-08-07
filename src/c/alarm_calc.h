@@ -148,6 +148,24 @@ time_t ac_window_start(uint8_t semantics, bool smart_window_active,
                        uint16_t window_min, uint32_t full_dev_s,
                        time_t alarm_time);
 
+// When the PRE-ALARM waiting screen should open for an occurrence at
+// `alarm_time`, or 0 when it should not open at all.
+//
+// Returns `alarm_time - pre_min * 60`, and 0 when either the feature is off
+// (`pre_min == 0`) or that instant is not strictly before `window_start` --
+// in which case the smart window's own screen is already opening then or
+// earlier, and a second wakeup would add nothing.
+//
+// THE ANCHOR IS THE ALARM TIME, NOT THE RING DEADLINE. "An hour before the
+// alarm" is a statement about the time the user set, and anchoring there makes
+// all three time semantics come out right without a special case: under
+// SEMANTICS_RING_FROM the deadline sits at T + window, so anchoring on the
+// deadline would open this screen a whole window LATE relative to what the user
+// asked for. Pass ac_window_start's result as `window_start` -- with the smart
+// window off it collapses onto the ring deadline, which correctly makes any
+// positive lead qualify.
+time_t ac_prealarm_start(time_t alarm_time, uint16_t pre_min, time_t window_start);
+
 // Drop every SPENT one-time alarm -- weekday_mask == 0 and not enabled -- from
 // alarms[0..count), compacting the survivors down. Returns the new count.
 //
