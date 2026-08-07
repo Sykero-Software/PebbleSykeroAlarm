@@ -766,6 +766,7 @@ static void open_alarm_list(void) {
 
 static Window      *s_night_window;
 static ScrollLayer *s_night_scroll;
+static TextLayer   *s_night_head_text;
 static TextLayer   *s_night_text;
 static char         s_night_head[128];
 static char         s_night_buf[1024];   // grown: the explanation block is new
@@ -773,12 +774,7 @@ static char         s_night_buf[1024];   // grown: the explanation block is new
 static void night_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
-  // static, not a local: NIGHT_HISTORY(7) * sizeof(NightSummary)(32) = 224
-  // bytes against the ~2 KB app stack -- squarely the "couple hundred bytes"
-  // class that produced App fault! PC:0 LR:0 on hardware in the sibling apps.
-  // night_window_load runs from a single window-load callback (single-threaded
-  // event loop), so a non-reentrant buffer is safe, same as as_push_night's.
-  static NightSummary ns[NIGHT_HISTORY];
+  static NightSummary ns[NIGHT_HISTORY];   // 224 B: too big for the ~2 KB stack
   int n = as_load_nights(ns, NIGHT_HISTORY);
   nt_build(ns, n, s_night_head, sizeof(s_night_head),
            s_night_buf, sizeof(s_night_buf));
@@ -786,26 +782,49 @@ static void night_window_load(Window *w) {
   s_night_scroll = scroll_layer_create(b);
   scroll_layer_set_click_config_onto_window(s_night_scroll, w);
   // The default shadow dithers over the last visible line whenever there is
-  // more content to scroll to (confirmed by a zoomed screenshot: it degraded
-  // "P75 06:33" into a speckled mess) -- this screen's own text is the only
-  // scroll affordance it needs.
+  // more to scroll to (a zoomed screenshot showed it degrade "P75 06:33" into a
+  // speckled mess) -- this screen's own text is the only affordance it needs.
   scroll_layer_set_shadow_hidden(s_night_scroll, true);
 
-  GRect tb = GRect(4, 0, b.size.w - 8, 2000);
-  s_night_text = text_layer_create(tb);
+  const int inner_w = b.size.w - 8;
+  int y = 0;
+
+  // The glance, large. nt_build puts the label and the value on separate lines
+  // so nothing breaks mid-value at 24 pt. An empty head is legal (nothing
+  // recorded, or the night could not be judged) and must take no space.
+  if (s_night_head[0] != '\0') {
+    s_night_head_text = text_layer_create(GRect(4, y, inner_w, 400));
+    text_layer_set_font(s_night_head_text,
+                        fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+    text_layer_set_overflow_mode(s_night_head_text, GTextOverflowModeWordWrap);
+    text_layer_set_text(s_night_head_text, s_night_head);
+    GSize hu = text_layer_get_content_size(s_night_head_text);
+    text_layer_set_size(s_night_head_text, GSize(inner_w, hu.h + 4));
+    scroll_layer_add_child(s_night_scroll, text_layer_get_layer(s_night_head_text));
+    y += hu.h + 10;
+  }
+
+  s_night_text = text_layer_create(GRect(4, y, inner_w, 2000));
   text_layer_set_font(s_night_text, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_overflow_mode(s_night_text, GTextOverflowModeWordWrap);
   text_layer_set_text(s_night_text, s_night_buf);
-  GSize used = text_layer_get_content_size(s_night_text);
-  text_layer_set_size(s_night_text, GSize(b.size.w - 8, used.h + 8));
-  scroll_layer_set_content_size(s_night_scroll, GSize(b.size.w, used.h + 16));
+  GSize bu = text_layer_get_content_size(s_night_text);
+  text_layer_set_size(s_night_text, GSize(inner_w, bu.h + 8));
   scroll_layer_add_child(s_night_scroll, text_layer_get_layer(s_night_text));
+
+  scroll_layer_set_content_size(s_night_scroll, GSize(b.size.w, y + bu.h + 16));
   layer_add_child(root, scroll_layer_get_layer(s_night_scroll));
 }
 
 static void night_window_unload(Window *w) {
+  if (s_night_head_text) {
+    text_layer_destroy(s_night_head_text);
+    s_night_head_text = NULL;
+  }
   text_layer_destroy(s_night_text);
+  s_night_text = NULL;
   scroll_layer_destroy(s_night_scroll);
+  s_night_scroll = NULL;
 }
 
 static void open_last_night(void) {
