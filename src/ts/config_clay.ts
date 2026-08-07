@@ -3,6 +3,12 @@
 // The AlarmSet wire string a fresh phone proposes: 07:00 Mon-Fri.
 export const ALARM_LIST_DEFAULT = '07:00|1111100';
 
+// The full behaviour documentation. English only on purpose: how-it-works.fi.md
+// exists but is the maintainer's own extra, and the English doc links to it in
+// its first line, so the app has exactly one reference to keep alive.
+export const HOW_IT_WORKS_URL =
+  'https://github.com/Sykero-Software/PebbleSykeroAlarm/blob/master/docs/how-it-works.md';
+
 export function buildConfig(): any[] {
   const items: any[] = [
     { type: 'heading', defaultValue: 'Sykerö Smart Alarm' },
@@ -10,7 +16,21 @@ export function buildConfig(): any[] {
       type: 'text',
       defaultValue: 'Alarms are configured here, not on the watch. '
                   + 'On the watch you can switch an alarm off or skip its next '
-                  + 'occurrence.',
+                  + 'occurrence.'
+                  // The settings below only make sense once you know what the
+                  // alarm measures -- the sensitivity choice in particular is a
+                  // guess without it. Both a link and the bare URL: this page is
+                  // a data:text/html URL in the Core app, where a tap is not
+                  // guaranteed to reach a browser, and an inert anchor with no
+                  // visible address would be a dead end.
+                  + '<br><br>New here? <a href="' + HOW_IT_WORKS_URL + '">How it '
+                  + 'works</a> explains what the watch measures, how it decides '
+                  + 'when to wake you, and what each setting below actually '
+                  + 'changes.<br>'
+                  // word-break, or the 86-character unbreakable URL widens the
+                  // page and the whole config scrolls sideways on a phone.
+                  + '<span style="word-break:break-all">' + HOW_IT_WORKS_URL
+                  + '</span>',
     },
   ];
 

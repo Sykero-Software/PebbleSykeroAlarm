@@ -1,9 +1,12 @@
-Sykerö Smart Alarm — an alarm clock built around two things the built-in Pebble alarm doesn't do well.
+Sykerö Smart Alarm wakes you a few minutes early, at a moment you are already stirring — and never a minute later than the time you set.
 
-A smart alarm that actually works: instead of waking you at the first twitch of movement, it learns your own night's baseline and looks for a sustained rise above it — a real lighter-sleep signal — inside a window you set before your deadline. There's always a hard time behind it, so a quiet night still wakes you on time. A "last night" summary on the watch shows your baseline, what triggered the alarm, and when it would have fired at each other sensitivity, so you can tune it from real data.
+Instead of firing at the first twitch of movement, it learns how still you have been tonight and waits for a sustained rise above your own baseline: a real lighter-sleep signal, inside a window you choose ahead of your alarm. There is always a hard time behind it, so a quiet night still wakes you on time. A "last night" summary on the watch shows how still you were, what it took to trigger, and when it would have fired at each other sensitivity — so you tune it from your own data instead of guessing.
 
 A gradual wake instead of one abrupt buzz: vibration starts gentle with long gaps, then tightens and strengthens, with sound joining later on watches with a speaker. Choose Gentle, Normal or Insistent, or set your own timing. A deliberate stop gesture (long press, or a two- or three-tap) means a sleepy hand can't dismiss it by accident.
 
 Up to 8 alarms, each with its own repeat days, snooze and skip-next. Everything is configured from your phone; the watch shows status and quick actions.
 
-Two honest limits: the smart alarm needs activity tracking turned on, and the original Pebble / Pebble Steel are not supported at all — that generation has no motion-sensing API, so there is nothing for the smart alarm to read. And the sound stage needs a speaker (Pebble Time 2 or Pebble 2 Duo); other watches get vibration-and-backlight escalation only.
+Worth ten minutes before your first night — what the watch measures, how it decides, every setting, and what the app deliberately does not do:
+https://github.com/Sykero-Software/PebbleSykeroAlarm/blob/master/docs/how-it-works.md
+
+Three honest limits. The smart alarm needs activity tracking turned on. The original Pebble and Pebble Steel are not supported at all — that generation has no motion-sensing API, so there is nothing for the smart alarm to read — and Pebble Time Round is not supported yet, because its round screen needs a layout of its own. And the sound stage needs a speaker (Pebble Time 2 or Pebble 2 Duo); other watches get vibration-and-backlight escalation only.

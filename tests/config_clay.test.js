@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 const test = require('node:test');
 const assert = require('node:assert');
-const { buildConfig } = require('../src/pkjs/config_clay.js');
+const { buildConfig, HOW_IT_WORKS_URL } = require('../src/pkjs/config_clay.js');
 const { NUMERIC_KEYS, BOOL_KEYS, buildDict } = require('../src/pkjs/index.js');
 
 function allItems(items, out) {
@@ -294,4 +294,31 @@ test('the Clay snooze list matches the lengths the watch menu offers', () => {
   assert.deepStrictEqual(item.options.map((o) => o.value),
                          ['0', '5', '10', '15', '20', '30', '45', '60']);
   assert.strictEqual(item.defaultValue, '10');
+});
+
+test('the config page points at how-it-works, as a real link and as a typeable URL', () => {
+  // The doc is the only place the smart alarm's behaviour is explained in full,
+  // and a user who never learns it exists will read the sensitivity slider as a
+  // guess. So the FIRST text block on the page has to name it.
+  //
+  // Belt and braces on the URL: the config page is a data:text/html URL in the
+  // Core app, where an <a> tap is not guaranteed to reach a browser (the same
+  // context that disables localStorage). If the anchor is inert the bare URL
+  // next to it is still readable, so the reference cannot become a dead end.
+  const intro = allItems(buildConfig()).find(
+    (i) => i.type === 'text' && String(i.defaultValue).indexOf(HOW_IT_WORKS_URL) >= 0);
+  assert.ok(intro, 'no text item links to how-it-works');
+
+  const html = String(intro.defaultValue);
+  assert.ok(html.indexOf('href="' + HOW_IT_WORKS_URL + '"') >= 0,
+            'the URL must appear as a real anchor href');
+  assert.ok(html.indexOf('>' + HOW_IT_WORKS_URL + '<') >= 0
+            || html.indexOf(HOW_IT_WORKS_URL + ' ') >= 0
+            || html.replace(/<[^>]*>/g, '').indexOf(HOW_IT_WORKS_URL) >= 0,
+            'the URL must ALSO be visible as plain text, for when the tap is inert');
+
+  // English only. how-it-works.fi.md exists but is the maintainer's own extra;
+  // the doc itself links to it, so the app must not fork the reference.
+  assert.ok(html.indexOf('how-it-works.fi.md') < 0,
+            'the app links the English doc only');
 });
