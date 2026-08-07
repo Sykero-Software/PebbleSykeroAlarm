@@ -100,6 +100,26 @@ static time_t prv_next_dst_check(time_t now) {
   return t;
 }
 
+int sc_next_unserved(const Alarm *alarms, int count, const Config *cfg,
+                     const RunState *rs, time_t now, time_t *alarm_when) {
+  // The lead time between an occurrence and the instant its ring must start: 0
+  // under SEMANTICS_RING_LATEST, the escalation's full development under
+  // SEMANTICS_AWAKE_BY, and NEGATIVE (minus the window) under
+  // SEMANTICS_RING_FROM, whose deadline sits after the alarm time. Signed on
+  // purpose -- ac_is_served subtracts it, so the negative case still compares
+  // like for like. Derived FROM sc_ring_deadline rather than recomputed, so that
+  // function stays the single owner of the semantics; the difference does not
+  // depend on which occurrence it is asked about, so `now` serves as the
+  // reference.
+  int32_t lead_s = (int32_t)(now - sc_ring_deadline(cfg, now));
+  // ...unserved: an occurrence that already rang must never be armed again. A
+  // smart window can ring at 07:20 for a 07:50 alarm, and then "the next
+  // occurrence after now" is still today's 07:50 -- the alarm rang twice, with
+  // no snooze, on a real wrist (2026-08-01). Every caller reads the record.
+  return ac_next_alarm_unserved(alarms, count, now, (int)rs->served_slot,
+                                (time_t)rs->served_at, lead_s, alarm_when);
+}
+
 bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
               const RunState *rs, time_t now, bool ringing) {
   // Cancel-then-reschedule is the only reliable approach: WakeupIds are lost when
@@ -108,22 +128,7 @@ bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
   bool ok = true;
 
   time_t alarm_when = 0;
-  // The lead time between an occurrence and the instant its ring must start: 0
-  // under SEMANTICS_RING_LATEST, the escalation's full development under
-  // SEMANTICS_AWAKE_BY, and NEGATIVE (minus the window) under SEMANTICS_RING_FROM,
-  // whose deadline sits after the alarm time. Signed on purpose -- ac_is_served
-  // subtracts it, so the negative case still compares like for like (occurrence +
-  // window against a served deadline of occurrence + window). Derived FROM
-  // sc_ring_deadline rather than recomputed, so that function stays the single
-  // owner of the semantics; the difference does not depend on which occurrence it
-  // is asked about, so `now` serves as the reference.
-  int32_t lead_s = (int32_t)(now - sc_ring_deadline(cfg, now));
-  // ...unserved: an occurrence that already rang must never be armed again. A
-  // smart window can ring at 07:20 for a 07:50 alarm, and then "the next
-  // occurrence after now" is still today's 07:50 -- the alarm rang twice, with
-  // no snooze, on a real wrist (2026-08-01). Every re-arm reads the record.
-  int slot = ac_next_alarm_unserved(alarms, count, now, (int)rs->served_slot,
-                                    (time_t)rs->served_at, lead_s, &alarm_when);
+  int slot = sc_next_unserved(alarms, count, cfg, rs, now, &alarm_when);
 
   // PRIORITY 1 — the hard deadline. Scheduled before anything else so that if
   // slots or E_RANGE retries run out, the thing that still exists is the alarm.
@@ -205,6 +210,21 @@ bool sc_rearm(const Alarm *alarms, int count, const Config *cfg,
   // daylight-saving change, and the setting that could switch it off told the user
   // to leave it on. A wakeup slot is not scarce enough to make that a choice.
   sc_schedule(prv_next_dst_check(now), WC_DST);
+
+  // PRIORITY 5 -- the pre-alarm waiting screen. Deliberately LAST: wakeup slots
+  // and sc_schedule's E_RANGE retries can run out, and this is the only wakeup
+  // here whose loss costs the user nothing but a convenience. The alarm itself
+  // is priority 1 for the same reason.
+  //
+  // No cycle is begun and no re-entry is armed by this wakeup (see the handler
+  // in main.c): it exists to put a screen up, not to monitor anything.
+  if (slot >= 0 && cfg->pre_alarm_min > 0) {
+    time_t pre = ac_prealarm_start(alarm_when, cfg->pre_alarm_min,
+                                   sc_window_start(cfg, alarm_when));
+    if (pre > now) {
+      sc_schedule(pre, WC_PREALARM);
+    }
+  }
 
   // WC_REENTRY is deliberately NOT armed here: it is only wanted while a window
   // is actually open, and it is re-armed on every fire (see sc_arm_reentry).

@@ -12,6 +12,7 @@ typedef enum {
   WC_SNOOZE   = 3,   // snooze expiry, and re-entry while ringing
   WC_REENTRY  = 4,   // rolling: revive the app if something killed it mid-window
   WC_DST      = 5,   // ~03:00 daily clock-shift check
+  WC_PREALARM = 6,   // the pre-alarm waiting screen opens (no cycle, no ring)
 } WakeCookie;
 
 // How far ahead the rolling re-entry wakeup is placed. Must be > 60 s: PebbleOS
@@ -57,6 +58,16 @@ void sc_arm_reentry(time_t now);
 // pure and host-tested for all three semantics -- see alarm_calc.h.
 time_t sc_ring_deadline(const Config *cfg, time_t alarm_time);
 time_t sc_window_start(const Config *cfg, time_t alarm_time);
+
+// The slot index of the next occurrence that has not already rung, or -1;
+// writes that occurrence's time to *alarm_when (untouched when it returns -1).
+// Shared -- not just factored out of sc_rearm for tidiness -- because the
+// pre-alarm wakeup handler (main.c) must name the exact same occurrence
+// sc_rearm armed. A second private copy of this walk is precisely the defect
+// backlog item 25 records: prv_dump_alarm kept its own copy of a loop that had
+// been fixed in prv_pick_alarm, and stayed wrong for five days.
+int sc_next_unserved(const Alarm *alarms, int count, const Config *cfg,
+                     const RunState *rs, time_t now, time_t *alarm_when);
 
 // The two Config values resolved above, exposed for the callers that pass them
 // STRAIGHT to the pure math (ac_window_wakeup) rather than going through the two
