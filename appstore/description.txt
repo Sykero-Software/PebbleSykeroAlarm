@@ -8,5 +8,3 @@ Up to 8 alarms, each with its own repeat days, snooze and skip-next. Everything 
 
 Worth ten minutes before your first night — what the watch measures, how it decides, every setting, and what the app deliberately does not do:
 https://github.com/Sykero-Software/PebbleSykeroAlarm/blob/master/docs/how-it-works.md
-
-Three honest limits. The smart alarm needs activity tracking turned on. The original Pebble and Pebble Steel are not supported at all — that generation has no motion-sensing API, so there is nothing for the smart alarm to read — and Pebble Time Round is not supported yet, because its round screen needs a layout of its own. And the sound stage needs a speaker (Pebble Time 2 or Pebble 2 Duo); other watches get vibration-and-backlight escalation only.
