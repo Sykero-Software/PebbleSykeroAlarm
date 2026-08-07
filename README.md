@@ -1,7 +1,12 @@
-# Sykerö Alarm
+# Sykerö Smart Alarm
 
-Pebble watchapp — **Sykerö Alarm** ("Smart Alarm" on the watch launcher, "Sykerö
-Smart Alarm" in the appstore).
+Pebble watchapp — **Sykerö Smart Alarm**, one name everywhere: the appstore, the
+phone's app list, and the watch launcher. The launcher row is too narrow to draw
+it in full on any board (emery shows "Sykerö Smart Ala…"), which is accepted
+deliberately — the phone's list and the store are where the name has to be
+recognisable, and the SDK gives no way to split the two: `pebble_sdk.py` sets
+`shortName` and `longName` both from `displayName`, so an explicit `shortName`
+in `package.json` is overwritten.
 
 An alarm clock built around two things the built-in Pebble alarm doesn't do
 well:

@@ -10,7 +10,7 @@
     "pebble-clay": "^1.0.4"
   },
   "pebble": {
-    "displayName": "Sykerö Alarm",
+    "displayName": "Sykerö Smart Alarm",
     "uuid": "cba6bb36-e731-46b3-b5c7-915a997b8c61",
     "sdkVersion": "3",
     "enableMultiJS": true,
