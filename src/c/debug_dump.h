@@ -6,13 +6,16 @@
 
 #define SA_DEBUG_DUMP 1
 
-// Development-build rows in the main menu: "Test alarm" and "Dump last night".
-// Both are deliberate user actions that a shipped alarm clock has no business
-// offering, and the dump in particular used to run on EVERY launch -- measured
-// on the watch, that held the event loop for 1.5-4 s (paced APP_LOG bursts plus
-// a synchronous read of up to 640 minutes of health history), which is the
-// "buttons do not respond when I open the app" the user reported. A release
-// build sets this to 0; the instrumentation itself can then stay in the tree.
+// Development-build rows in the main menu. As of 2026-08-06 this gates ONLY
+// "Test alarm": the dump's row is gated at RUNTIME by the phone's Debugging
+// toggle (Config.debug_features), because a user has to be able to produce a
+// bug report from a released build -- and because a release that depends on
+// someone remembering to set a compile flag is a hazard nothing enforces.
+//
+// Test alarm stays here: it occupies a real alarm slot, and a watch-created
+// alarm is invisible and undeletable from the phone's config page (backlog 12),
+// which is a developer annoyance today and would be a user-facing defect if real
+// users could reach it. A RELEASE BUILD MUST STILL SET THIS TO 0.
 #define SA_DEV_MENU 1
 
 #if SA_DEBUG_DUMP

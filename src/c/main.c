@@ -389,6 +389,12 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   GET_INT(SnoozeMax, snooze_max);
   GET_INT(SnoozeRampOffsetS, snooze_ramp_offset_s);
   GET_BOOL(EscRampVib, esc_ramp_vib);
+  // DebugFeatures changes main_rows()'s row count (the Diagnostics row), same
+  // as any other field here that reload_and_rearm() already reacts to -- no
+  // separate reload needed. reload_and_rearm() -> refresh_list() calls
+  // menu_layer_reload_data(s_main_menu) whenever it exists, and GET_BOOL sets
+  // changed=true unconditionally when the tuple is present, so a live config
+  // message flips the row on/off immediately, without relaunching the app.
   GET_BOOL(DebugFeatures, debug_features);
   if (changed) {
     as_save_config(&s_cfg);   // esc_clamp runs inside as_save_config
@@ -911,10 +917,20 @@ static int main_rows(void) {
   s_main_row_kinds[n++] = MAIN_ROW_LAST_NIGHT;
 #if SA_DEV_MENU
   s_main_row_kinds[n++] = MAIN_ROW_TEST;
-#if SA_DEBUG_DUMP
-  // Both flags: with SA_DEBUG_DUMP 0 there is no dbg_dump to call.
-  s_main_row_kinds[n++] = MAIN_ROW_DUMP;
 #endif
+#if SA_DEBUG_DUMP
+  // RUNTIME-gated, unlike the Test alarm above: this is how an ordinary user
+  // produces a bug report after the public release, so it has to exist in a
+  // release build -- and a compile flag that nobody enforces is exactly what
+  // made "remember SA_DEV_MENU 0" a release hazard (backlog 13). Hidden unless
+  // the phone's Debugging toggle is on, so a default install never shows it.
+  //
+  // Test alarm deliberately stays compile-gated: it occupies a real alarm slot,
+  // and backlog 12 (a watch-created alarm is invisible and undeletable from the
+  // phone) would become a user-facing defect the moment real users can reach it.
+  if (s_cfg.debug_features) {
+    s_main_row_kinds[n++] = MAIN_ROW_DUMP;
+  }
 #endif
   return n;
 }
@@ -1002,7 +1018,10 @@ static void main_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
       menu_cell_basic_draw(gctx, cell, "Test alarm", "rings in 2 min", NULL);
       break;
     case MAIN_ROW_DUMP:
-      menu_cell_basic_draw(gctx, cell, "Dump last night", "to pebble logs", NULL);
+      // "takes a few seconds" is not decoration: the dump reads up to 640
+      // minutes of health history and holds the event loop 1.5-4 s, which is the
+      // "buttons do not respond" report that got it removed from app launch.
+      menu_cell_basic_draw(gctx, cell, "Diagnostics", "for a bug report", NULL);
       break;
     default:
       break;
