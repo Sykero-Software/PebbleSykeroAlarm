@@ -283,7 +283,7 @@ static void reload_and_rearm(void) {
 // the state before the user's first real night.
 //
 // So: every mutation of the cycle goes through this pair. Nothing else may
-// assign these five fields, except ring_snooze_now's deliberate move of
+// assign these five fields, except ring_snooze_for's deliberate move of
 // ring_started_at/snooze_count WITHIN a live cycle (a snooze continues the
 // cycle, it does not begin or end one).
 static void runstate_end_cycle(void) {
@@ -1151,6 +1151,10 @@ static TextLayer *s_ring_sub;
 static TextLayer *s_ring_up;
 static TextLayer *s_ring_down;
 static TextLayer *s_ring_hint;
+static TextLayer *s_ring_plus;
+// Held so burst_cb's over-cap path can close a menu the user left open when the
+// alarm gave up; NULL whenever no menu is on screen.
+static ActionMenu *s_snooze_menu;
 
 static bool     s_ringing;
 static AppTimer *s_hint_timer;
@@ -1279,6 +1283,12 @@ static void burst_cb(void *data) {
   update_ring_text();
 
   if (s.over_cap) {
+    if (s_snooze_menu) {
+      // The user opened the menu and never chose. Repainting the window
+      // underneath a modal they are still holding would leave them picking a
+      // snooze for an alarm that has already given up.
+      action_menu_close(s_snooze_menu, false);
+    }
     // Stop making noise but LEAVE the screen up, so the user can see the alarm
     // was missed. Mark the slot missed; the marker clears the next time this
     // alarm rings and is dismissed normally.
@@ -1364,7 +1374,15 @@ static void ring_stop_now(void) {
   close_to_watchface();
 }
 
-static void ring_snooze_now(void) {
+// `minutes` is the length THIS snooze runs for: s_cfg.snooze_min from the UP
+// button, or whatever the SELECT menu offered. Nothing else differs between the
+// two -- the snooze counts against snooze_max either way, bumps snooze_count and
+// therefore the ramp offset, and hands the screen to PENDING_SNOOZED.
+//
+// A menu snooze is ONE-OFF and needs no new state: ring_started_at already
+// carries the expiry, and sc_rearm uses it as-is (it explicitly does not re-add
+// snooze_min), so the next UP press still means the configured default.
+static void ring_snooze_for(uint16_t minutes) {
   // Out of snoozes (or snoozing disabled) behaves as Stop rather than doing
   // nothing, so the button is never inert.
   if (s_cfg.snooze_min == 0
@@ -1383,7 +1401,7 @@ static void ring_snooze_now(void) {
   // from the right place, and so sc_rearm can re-derive the snooze wakeup after
   // a relaunch (it reads this field directly — see scheduler.c). Set and saved
   // BEFORE the re-arm below, since sc_rearm reads it.
-  time_t until = time(NULL) + (time_t)s_cfg.snooze_min * SECONDS_PER_MINUTE;
+  time_t until = time(NULL) + (time_t)minutes * SECONDS_PER_MINUTE;
   s_rs.ring_started_at = (uint32_t)until;
   as_save_runstate(&s_rs);
 
@@ -1402,8 +1420,8 @@ static void ring_snooze_now(void) {
   // caller of sc_rearm uses, so there is exactly one code path that computes
   // that wakeup rather than two that could disagree.
   bool armed = sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL), s_ringing);
-  APP_LOG(APP_LOG_LEVEL_INFO, "SNOOZE #%d until %lu (ramp offset %d s)",
-          s_rs.snooze_count, (unsigned long)until,
+  APP_LOG(APP_LOG_LEVEL_INFO, "SNOOZE #%d for %u min until %lu (ramp offset %d s)",
+          s_rs.snooze_count, (unsigned)minutes, (unsigned long)until,
           s_rs.snooze_count * s_cfg.snooze_ramp_offset_s);
 
   if (!armed) {
@@ -1503,15 +1521,72 @@ static void ring_down_multi(ClickRecognizerRef rec, void *ctx) {
 // ten minutes. The first press only says what the second would do.
 static void ring_up_multi(ClickRecognizerRef rec, void *ctx) {
   if (click_number_of_clicks_counted(rec) >= STOP_PRESSES) {
-    ring_snooze_now();
+    ring_snooze_for(s_cfg.snooze_min);
   } else {
     show_press_again_hint("snooze");
   }
 }
 
-// BACK and SELECT are bound EXPLICITLY to a no-op. An unbound BACK pops the
-// window by default, which would silently dismiss the alarm — the opposite of
-// what an alarm clock must do.
+// The lengths SELECT offers. An alarm's scale, not a kitchen timer's: the
+// sibling Countdown timer's list starts at 1 minute, which is useless here.
+// Kept in sync BY HAND with the SnoozeMin option list in src/ts/config_clay.ts
+// -- both are short literal lists, and the two places a snooze length is chosen
+// must agree.
+static const uint16_t SNOOZE_MENU_MIN[] = { 5, 10, 15, 20, 30, 45, 60 };
+static const char *const SNOOZE_MENU_LABELS[] = {
+  "5 min", "10 min", "15 min", "20 min", "30 min", "45 min", "60 min" };
+
+static void snooze_menu_perform(ActionMenu *menu, const ActionMenuItem *item, void *ctx) {
+  uint16_t minutes = (uint16_t)(uintptr_t)action_menu_item_get_action_data(item);
+  // Close BEFORE snoozing: ring_snooze_for pushes the pending window and removes
+  // the ring window under it, and a modal left on top of that would hide the
+  // very screen the snooze exists to show.
+  action_menu_close(menu, false);
+  if (minutes > 0) {
+    ring_snooze_for(minutes);
+  }
+}
+
+static void snooze_menu_did_close(ActionMenu *menu, const ActionMenuItem *item, void *ctx) {
+  s_snooze_menu = NULL;
+  action_menu_hierarchy_destroy((const ActionMenuLevel *)ctx, NULL, NULL);
+}
+
+// SELECT, twice. One press only says what the second would do -- the same rule
+// UP and DOWN follow on this screen, because a hand that finds a button by feel
+// in the dark must not be able to change what the alarm does on the first press.
+// Choosing FROM the menu then acts on one press: opening it was the deliberate
+// act, and a confirmation inside a modal the user had to double-press to reach
+// would be ceremony.
+static void ring_select_multi(ClickRecognizerRef rec, void *ctx) {
+  if (s_cfg.snooze_min == 0) {
+    return;   // snoozing is off; the "+" is hidden and this button is inert
+  }
+  if (click_number_of_clicks_counted(rec) < STOP_PRESSES) {
+    show_press_again_hint("choose a snooze");
+    return;
+  }
+  ActionMenuLevel *root = action_menu_level_create(ARRAY_LENGTH(SNOOZE_MENU_MIN));
+  for (unsigned i = 0; i < ARRAY_LENGTH(SNOOZE_MENU_MIN); i++) {
+    action_menu_level_add_action(root, SNOOZE_MENU_LABELS[i], snooze_menu_perform,
+                                 (void *)(uintptr_t)SNOOZE_MENU_MIN[i]);
+  }
+  ActionMenuConfig cfg = {
+    .root_level = root,
+    .context = root,
+    .did_close = snooze_menu_did_close,
+    .colors = { .background = NIGHT_BG, .foreground = GColorWhite },
+    .align = ActionMenuAlignCenter,
+  };
+  s_snooze_menu = action_menu_open(&cfg);
+}
+
+// BACK is bound EXPLICITLY to a no-op. An unbound BACK pops the window by
+// default, which would silently dismiss the alarm — the opposite of what an
+// alarm clock must do. With the snooze menu open, BACK dismisses the *menu*
+// (ActionMenu's own default dismiss gesture, handled before this binding ever
+// sees the click) and leaves the ring running underneath -- which is correct:
+// backing out of a menu you didn't want must not also cancel the alarm.
 static void ring_noop(ClickRecognizerRef rec, void *ctx) {}
 
 static void ring_click_config(void *ctx) {
@@ -1520,7 +1595,8 @@ static void ring_click_config(void *ctx) {
   window_multi_click_subscribe(BUTTON_ID_DOWN, 1, STOP_PRESSES, 400, false,
                                ring_down_multi);
   window_single_click_subscribe(BUTTON_ID_BACK, ring_noop);
-  window_single_click_subscribe(BUTTON_ID_SELECT, ring_noop);
+  window_multi_click_subscribe(BUTTON_ID_SELECT, 1, STOP_PRESSES, 400, false,
+                               ring_select_multi);
 }
 
 // Pick the largest of these three whose measured line-box height fits
@@ -1556,6 +1632,19 @@ static void ring_window_load(Window *w) {
   GRect b = layer_get_bounds(root);
   window_set_background_color(w, NIGHT_BG);
 
+  // A permanent hint that the middle button does something, at the height of
+  // the button itself -- the same idea as PebbleCountdownTimer's alarm screen.
+  // Hidden when snoozing is switched off, because then SELECT really is inert.
+  //
+  // The clock gives up PLUS_MARGIN on BOTH sides, not just the right: a clock
+  // centred in a box that is short on one side reads as crooked at 42 pt.
+  //
+  // Declared here rather than down by the "+" label itself, because it is also
+  // fed to ring_time_font below: the font chooser must measure "00:00" against
+  // the SAME narrowed width the clock is actually drawn at, not the full board
+  // width, or the two would disagree about what fits.
+  const int PLUS_MARGIN = 16;
+
   // Follows PebbleCountdownTimer's alarm screen (src/c/main.c:344-399): the two
   // button labels right-aligned and positioned vertically AT their physical
   // buttons (UP ~22% of height, DOWN ~78%) -- readable at arm's length by
@@ -1584,7 +1673,7 @@ static void ring_window_load(Window *w) {
   int time_h  = mid_h * 55 / 100;
 
   GSize time_sz;
-  GFont time_font = ring_time_font(b.size.w, time_h, &time_sz);
+  GFont time_font = ring_time_font(b.size.w - 2 * PLUS_MARGIN, time_h, &time_sz);
   if (time_sz.h > time_h) {
     // Not even BITHAM_30_BLACK/GOTHIC_28_BOLD's measured line box fit at the
     // normal label height -- shrink the labels to buy the clock more room and
@@ -1596,7 +1685,7 @@ static void ring_window_load(Window *w) {
     mid_top = up_y + btn_h + 2;
     mid_h   = down_y - mid_top - 2;
     time_h  = mid_h * 55 / 100;
-    time_font = ring_time_font(b.size.w, time_h, &time_sz);
+    time_font = ring_time_font(b.size.w - 2 * PLUS_MARGIN, time_h, &time_sz);
   }
   int sub_h = mid_h - time_h;
 
@@ -1618,10 +1707,19 @@ static void ring_window_load(Window *w) {
   night_text_layer(s_ring_down);
   layer_add_child(root, text_layer_get_layer(s_ring_down));
 
+  s_ring_plus = text_layer_create(GRect(0, b.size.h / 2 - 12, b.size.w - 4, 24));
+  text_layer_set_font(s_ring_plus, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
+  text_layer_set_text_alignment(s_ring_plus, GTextAlignmentRight);
+  text_layer_set_text(s_ring_plus, "+");
+  night_text_layer(s_ring_plus);
+  layer_add_child(root, text_layer_get_layer(s_ring_plus));
+  layer_set_hidden(text_layer_get_layer(s_ring_plus), s_cfg.snooze_min == 0);
+
   // Time + subtitle share the band left between the two button labels, split
   // proportionally (60/40) -- verified by screenshot on both boards rather
   // than assumed (see the task report).
-  s_ring_time = text_layer_create(GRect(0, mid_top, b.size.w, time_h));
+  s_ring_time = text_layer_create(GRect(PLUS_MARGIN, mid_top,
+                                        b.size.w - 2 * PLUS_MARGIN, time_h));
   text_layer_set_font(s_ring_time, time_font);
   text_layer_set_text_alignment(s_ring_time, GTextAlignmentCenter);
   night_text_layer(s_ring_time);
@@ -1655,6 +1753,7 @@ static void ring_window_unload(Window *w) {
   text_layer_destroy(s_ring_up);      s_ring_up = NULL;
   text_layer_destroy(s_ring_sub);     s_ring_sub = NULL;
   text_layer_destroy(s_ring_time);    s_ring_time = NULL;
+  text_layer_destroy(s_ring_plus);    s_ring_plus = NULL;
 }
 
 static void ring_minute_tick(struct tm *t, TimeUnits units) {
@@ -2321,7 +2420,7 @@ static void open_smart_window(int slot, time_t window_start, time_t deadline) {
   //
   // The condition is exactly sc_rearm's own definition of "a snooze wakeup is
   // pending" (ring_started_at holds the snooze EXPIRY while a snooze is in
-  // flight -- see ring_snooze_now), so the two cannot disagree. sc_rearm keeps
+  // flight -- see ring_snooze_for), so the two cannot disagree. sc_rearm keeps
   // the wakeup chain alive: it re-places this snooze at priority 2 plus every
   // alarm's own deadline, which is what the window branch would otherwise have
   // relied on this call to do.
