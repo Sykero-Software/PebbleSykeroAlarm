@@ -26,11 +26,19 @@ Other features:
 
 - Up to **8 alarm slots**, each with weekday repeat or one-time firing,
   enable/disable, skip-next and snooze.
-- **Two presses of either ring-screen button** — top to snooze, bottom to
-  stop — a single press only shows what the second would do, so a sleepy hand
-  can't dismiss or snooze it by accident; `BACK` deliberately does nothing
-  while it's ringing. A snooze keeps its own screen on the watch rather than
-  dropping back to the watchface.
+- **Two presses of any ring-screen button** — top to snooze, bottom to stop,
+  middle to pick a snooze length from a menu (5–60 min) — a single press only
+  shows what the second would do, so a sleepy hand can't dismiss or snooze it
+  by accident; `BACK` deliberately does nothing while it's ringing. Once inside
+  the menu, choosing acts on one press: opening it was the deliberate act. A
+  snooze keeps its own screen on the watch rather than dropping back to the
+  watchface.
+- **A waiting screen before the alarm**, an hour ahead by default (Off/15/30/60/
+  90 min). Wake up by yourself at 06:40 and the screen is already there: two
+  presses of the bottom button end the alarm, with no menus to find in the dark.
+  It names both the alarm and the deadline when they differ (`Alarm 07:00` /
+  `Rings by 07:30`), begins no smart window, and works with the smart alarm off
+  — where it is the only screen there is before the ring.
 - A **"Last night" summary** on the watch: sleep onset, the movement
   baseline, what triggered the alarm, and when it would have fired at each
   other sensitivity — the built-in calibration tool for deciding whether to

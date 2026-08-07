@@ -168,7 +168,7 @@ Kun soitto luovuttaa, se lakkaa pitämästä ääntä mutta jättää näytölle
 
 ### Pysäyttäminen ja torkku
 
-Soittoruudulla **molemmat napit vaativat kaksi painallusta**: ylänappi (*Snooze*)
+Soittoruudulla **kaikki napit vaativat kaksi painallusta**: ylänappi (*Snooze*)
 torkuttaa kahdesti painettuna, alanappi (*Stop*) pysäyttää kahdesti painettuna. Yksi
 painallus ei koskaan tee kumpaakaan — se vain näyttää, mitä toinen painallus tekisi
 (`Press 2x to snooze` / `Press 2x to stop`) — koska puoliunessa oleva käsi löytää
@@ -187,18 +187,33 @@ kellolla), sen avaaminen uudelleen tuo saman näytön suoraan takaisin eikä val
 Torkun ollessa käynnissä sekä päävalikko että herätyslista kertovat sen sanoin —
 `snoozed, in 4 min` — joten sitä ei tarvitse arvailla.
 
-Torkku on oletuksena 10 minuuttia ja niitä sallitaan 5; kun ne loppuvat, torkkunappi
-toimii pysäytyksenä sen sijaan että muuttuisi tehottomaksi. **Jokainen torkku
+Torkku on oletuksena 10 minuuttia ja niitä sallitaan 5. **Jokainen torkku
 aloittaa voimistumisen alusta.** (Voit muuttaa tämän: *"each snooze starts this far
 along"* -liu'un nostaminen saa toisen herätyksen jatkamaan pidemmältä rampista — eli
 alkamaan voimakkaampana kuin ensimmäinen.)
+
+**Keskinappi tarjoaa toisen torkkupituuden**, myös toisella painalluksella: valikon
+jossa on 5, 10, 15, 20, 30, 45 ja 60 minuuttia. Näytöllä sen merkkinä on pieni `+`
+juuri sen napin korkeudella. Kun valikko on auki, valinta toimii yhdellä
+painalluksella — valikon avaaminen oli se harkittu teko, ja erillinen varmistus
+valikon sisällä, johon pääsi vain kaksoispainalluksella, olisi pelkkää seremoniaa.
+Näin valittu pituus on kertaluonteinen: ylänappi tarkoittaa edelleen sitä, minkä
+asetit puhelimella.
+
+Kun torkut loppuvat, napit käyttäytyvät tarkoituksella eri tavalla. **Ylänappi**
+toimii pysäytyksenä sen sijaan että muuttuisi tehottomaksi — se pyytää "jotain"
+torkkua, ja pysäytys on rehellinen vastaus kun sellaista ei ole. **Keskinappi** sen
+sijaan muuttuu tehottomaksi ja `+` katoaa: se pyytää *tiettyä* pituutta, ja
+vastaaminen "45 minuuttiin" pysäyttämällä herätys näyttäisi siltä, että sovellus
+sivuuttaa juuri valitun luvun.
 
 ---
 
 ## 4. Kellon näytöt
 
-Herätykset asetetaan puhelimella. Kellossa on kolme näyttöä eikä mitään tapaa luoda
-herätysaikaa — tarkoituksella, koska puhelimen näppäimistö voittaa neljä nappia.
+Herätykset asetetaan puhelimella. Kello näyttää tilan ja tarjoaa pikatoimintoja, eikä
+siinä ole mitään tapaa luoda herätysaikaa — tarkoituksella, koska puhelimen
+näppäimistö voittaa neljä nappia.
 
 **Valikko** — seuraava herätys ja kuinka kaukana se on, herätyslista, "Last night",
 sekä Test alarm joka soi kahden minuutin päästä, jotta voit tuntea asetuksesi
@@ -216,7 +231,25 @@ molemmat vaativat kaksi painallusta jottei kumpikaan tapahdu vahingossa:
 - **BACK kahdesti — vie kellotaululle.** Ikkuna jää auki, joten näyttö palaa noin
   kolmen minuutin kuluessa.
 
-**Soittonäyttö** — kellonaika, herätys, ja miten se pysäytetään.
+**Ennakkonäyttö** — sama näyttö ja samat napit, jopa 90 minuuttia aiemmin. Aseta
+puhelimella *"show alarm screen before"* (Off, 15, 30, 60 tai 90 minuuttia; oletus
+tunti), ja kello nostaa odotusnäytön esiin sen verran ennen herätystä. Pointti on se
+aamu, jona heräät itse jo 06:40: sen sijaan että makaisit odottamassa herätystä tai
+etsisit valikoita pimeässä, näyttö on jo siellä ja kaksi DOWN-painallusta lopettaa
+sen. Se kertoo mitä herätystä se odottaa, ja kun ajat eroavat, se nimeää molemmat —
+`Alarm 07:00` ja sen alla `Rings by 07:30` — joten se ei koskaan ilmoita aikaa, joka
+herätys ei ole.
+
+Kolme asiaa siinä on tarkoituksellisia. Se **ei aloita älyikkunaa** — liikettä ei
+vielä mitata, eikä herätyksen omiin herätyksiin kosketa. Se toimii **älyherätyksen
+ollessa pois päältä**, jolloin se on ainoa näyttö jonka saat ennen soittoa. Ja **BACK
+kahdesti poistuu lopullisesti**: toisin kuin odotusnäyttö, joka valvoo jotain ja
+palaa kolmessa minuutissa, tämä ei valvo, joten sen sulkeminen tarkoittaa "anna olla
+kunnes herätys on todella lähellä" — vaihtoehto olisi, että sovellus tunkisi itsensä
+eteesi kolmisenkymmentä kertaa yhdeksänkymmenen minuutin aikana. Herätys itse pysyy
+aseistettuna kummassakin tapauksessa.
+
+**Soittonäyttö** — kellonaika, herätys, ja miten se pysäytetään (ks. §3).
 
 ---
 
@@ -268,6 +301,7 @@ Custom-tilaan; muuten esiasetus antaa nuo luvut.
 |---|---|---|
 | Smart alarm | päällä | Pois päältä saa jokaisen herätyksen soimaan tasan aikanaan, eikä mikään alla olevasta merkitse mitään |
 | Smart window length | 30 min | Kuinka paljon aamustasi tunnistin saa käyttää |
+| Show alarm screen before | 60 min | Kuinka kauan ennen herätystä odotusnäyttö avautuu, jotta voit lopettaa herätyksen kahdella painalluksella jos heräät aikaisin. Off poistaa sen käytöstä. **Riippumaton älyherätyksestä** — toimii sen ollessa pois päältä, eikä koskaan aikaista soittoa |
 | The alarm time is | the latest | Kummalle puolelle herätysaikaa ikkuna asettuu — katso luku 1 |
 | Sensitivity | Medium | Mistä oman yösi persentiilistä tulee laukaisukynnys |
 | *Custom:* stir percentile | 90 | Persentiili itse, 70–99 |
@@ -310,7 +344,7 @@ täysvoimaisia purskeita 45 vai 30 sekunnin välein.
 
 | Asetus | Oletus | Mitä se muuttaa |
 |---|---|---|
-| Snooze length | 10 min | Off poistaa torkun kokonaan (nappi pysäyttää silloin herätyksen) |
+| Snooze length | 10 min | Mitä ylänappi tarkoittaa: 5, 10, 15, 20, 30, 45 tai 60 min — samat pituudet jotka keskinapin valikko tarjoaa. Off poistaa torkun kokonaan (ylänappi pysäyttää silloin herätyksen ja keskinappi on tehoton) |
 | Snoozes allowed | 5 | Unlimited on sallittu; soitto ei koskaan hiljene sen takia |
 | Each snooze starts this far along | 0 s | 0 aloittaa voimistumisen alusta joka kerta. Suurempi arvo saa jokaisen torkun alkamaan voimakkaampana |
 

@@ -186,18 +186,31 @@ again brings this same screen straight back, not the menu. While a snooze is
 pending, both the main menu and the alarm list say so in words too — `snoozed,
 in 4 min` — so you never have to wonder.
 
-Snooze is 10 minutes by default, 5 snoozes maximum; when they run out, the snooze
-button behaves as Stop rather than going inert. **Each snooze restarts the
+Snooze is 10 minutes by default, 5 snoozes maximum. **Each snooze restarts the
 escalation from the beginning.** (You can change that: raising *"each snooze starts
 this far along"* makes a second alarm pick up further along the ramp — i.e. start
 stronger than the first one did.)
+
+**The middle button offers a different snooze length**, also on the second press:
+a menu of 5, 10, 15, 20, 30, 45 or 60 minutes, marked on the screen by a small `+`
+at that button's height. Once the menu is open, choosing acts on a single press —
+opening it was the deliberate act, and a confirmation inside a menu you had to
+double-press to reach would be ceremony. A length chosen this way is a one-off: the
+top button still means whatever you configured on the phone.
+
+When the snoozes run out the two buttons deliberately differ. The **top** button
+behaves as Stop rather than going inert — it asks for "a" snooze, and stopping is
+the honest answer when there isn't one. The **middle** button goes inert instead,
+and the `+` disappears: it asks for a *specific* length, and answering "45 min"
+with "alarm stopped" would read as the app ignoring the number you just picked.
 
 ---
 
 ## 4. The screens on the watch
 
-Alarms are set on the phone. The watch has three screens and no way to create an
-alarm time — deliberately, since a phone keyboard beats four buttons.
+Alarms are set on the phone. The watch shows state and offers quick actions, and has
+no way to create an alarm time — deliberately, since a phone keyboard beats four
+buttons.
 
 **The menu** — the next alarm and how far away it is, the alarm list, "Last night",
 and a Test alarm that rings two minutes from now so you can feel your settings
@@ -215,7 +228,25 @@ happens by accident:
 - **BACK twice — go to the watchface.** The window stays open, so the screen
   returns within about three minutes.
 
-**The ringing screen** — the time, the alarm, and how to stop it.
+**The pre-alarm screen** — the same screen, the same buttons, up to 90 minutes
+earlier. Set *"show alarm screen before"* on the phone (Off, 15, 30, 60 or 90
+minutes; an hour by default) and the watch puts the waiting screen up that long
+before the alarm. The point is the morning you wake by yourself at 06:40: instead of
+lying there waiting for the alarm, or hunting through menus in the dark, the screen
+is already there and two presses of DOWN end it. It says which alarm it is waiting
+for, and when the two differ it names both instants — `Alarm 07:00` above `Rings by
+07:30` — so it never announces a time the alarm is not.
+
+Three things about it are deliberate. It **does not start the smart window** — no
+movement is being measured yet, and the alarm's own wakeups are untouched. It works
+with **the smart alarm switched off**, where it is the only screen you get before the
+ring. And **BACK twice leaves for good**: unlike the waiting screen, which is
+monitoring something and comes back within three minutes, this one is not, so
+dismissing it means "leave me alone until the alarm is actually near" rather than
+having the app push itself in front of you thirty times over ninety minutes. The
+alarm itself stays armed either way.
+
+**The ringing screen** — the time, the alarm, and how to stop it (see §3).
 
 ---
 
@@ -267,6 +298,7 @@ Custom; otherwise the preset supplies those numbers.
 |---|---|---|
 | Smart alarm | on | Off makes every alarm ring exactly at its time and nothing below matters |
 | Smart window length | 30 min | How much of your morning the detector is allowed to use |
+| Show alarm screen before | 60 min | How long before the alarm the waiting screen opens, so you can end it with two presses if you wake early. Off disables it. **Independent of the smart alarm** — it works with it off, and it never makes the alarm ring earlier |
 | The alarm time is | the latest | Which side of the alarm time the window sits on — see §1 |
 | Sensitivity | Medium | Which percentile of your own night becomes the trigger level |
 | *Custom:* stir percentile | 90 | The percentile itself, 70–99 |
@@ -308,7 +340,7 @@ Normal comes down to 45 s versus 30 s between identical full-strength buzzes.
 
 | Setting | Default | What it changes |
 |---|---|---|
-| Snooze length | 10 min | Off disables snoozing entirely (the button then stops the alarm) |
+| Snooze length | 10 min | What the top button means: 5, 10, 15, 20, 30, 45 or 60 min — the same lengths the middle button's menu offers. Off disables snoozing entirely (the top button then stops the alarm, and the middle button is inert) |
 | Snoozes allowed | 5 | Unlimited is allowed; the ring never goes silent because of it |
 | Each snooze starts this far along | 0 s | 0 restarts the ramp each time. Higher makes each snooze start stronger |
 
