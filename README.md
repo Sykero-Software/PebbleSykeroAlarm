@@ -1,161 +1,122 @@
 # Sykerö Smart Alarm
 
-Pebble watchapp — **Sykerö Smart Alarm**, one name everywhere: the appstore, the
-phone's app list, and the watch launcher. The launcher row is too narrow to draw
-it in full on any board (emery shows "Sykerö Smart Ala…"), which is accepted
-deliberately — the phone's list and the store are where the name has to be
-recognisable, and the SDK gives no way to split the two: `pebble_sdk.py` sets
-`shortName` and `longName` both from `displayName`, so an explicit `shortName`
-in `package.json` is overwritten.
+A Pebble alarm clock that wakes you a few minutes early, at a moment you are already
+stirring — and never a minute later than the time you set.
 
-An alarm clock built around two things the built-in Pebble alarm doesn't do
-well:
+PebbleOS's built-in smart alarm fires on the first movement it detects, which in
+practice means the very start of the window, every night. This one reads the watch's
+per-minute movement history, derives a threshold from **your own night** rather than a
+fixed number, and waits for sustained above-baseline movement before it rings. A hard
+deadline always sits behind it, so a quiet night still wakes you on time.
 
-- **A smart alarm that actually works.** PebbleOS's built-in smart alarm
-  triggers on any detected movement at all, so it tends to fire on the very
-  first check and wakes you the full window early, every time. This one reads
-  the firmware's per-minute movement history, derives a wake threshold from
-  **the user's own night** (a percentile over the night's movement, excluding
-  wake episodes), and requires *sustained* above-normal movement over a
-  leaky integrator before firing — a real lighter-sleep signal, not a twitch.
-  There is always a hard deadline behind it, so a quiet night still rings on
-  time.
-- **A configurable wake escalation.** By default the vibration is at full
-  strength from the first buzz at a constant gap, and only the sound ramps —
-  a repeated too-gentle stimulus trains a sleeper to ignore the channel, so
-  the gentle start is opt-in rather than the default. Sound joins later and
-  ramps in volume on watches with a speaker. Three presets (Gentle / Normal /
-  Insistent) plus a Custom profile expose the individual timing parameters.
+App name: **Sykerö Smart Alarm** · UUID `cba6bb36-e731-46b3-b5c7-915a997b8c61`.
 
-Other features:
+**[Install from the Pebble appstore →](https://apps.repebble.com/a993645f974e4673a215a9e0)**
 
-- Up to **8 alarm slots**, each with weekday repeat or one-time firing,
-  enable/disable, skip-next and snooze.
-- **Two presses of any ring-screen button** — top to snooze, bottom to stop,
-  middle to pick a snooze length from a menu (5–60 min) — a single press only
-  shows what the second would do, so a sleepy hand can't dismiss or snooze it
-  by accident; `BACK` deliberately does nothing while it's ringing. Once inside
-  the menu, choosing acts on one press: opening it was the deliberate act. A
-  snooze keeps its own screen on the watch rather than dropping back to the
-  watchface.
-- **A waiting screen before the alarm**, an hour ahead by default (Off/15/30/60/
-  90 min). Wake up by yourself at 06:40 and the screen is already there: two
-  presses of the bottom button end the alarm, with no menus to find in the dark.
-  It names both the alarm and the deadline when they differ (`Alarm 07:00` /
-  `Rings by 07:30`), begins no smart window, and works with the smart alarm off
-  — where it is the only screen there is before the ring.
-- A **"Last night" summary** on the watch: sleep onset, the movement
-  baseline, what triggered the alarm, and when it would have fired at each
-  other sensitivity — the built-in calibration tool for deciding whether to
-  move the percentile.
+**How it works: [English](docs/how-it-works.md) · [suomeksi](docs/how-it-works.fi.md)**
+— what the watch measures, how it decides, what every setting changes, and what the app
+deliberately does not do. Worth ten minutes before your first night; its charts are
+drawn from a real recorded night rather than from illustrative data.
 
-All configuration — alarm times, smart-alarm window and sensitivity, wake
-profile, escalation timing, snooze behaviour — is done **phone-side via a Clay
-config page**; the watch shows state and offers quick actions, but there is no
-on-watch editing.
+## What it does
 
-## How it works
+- **A smart alarm built from your own baseline** — a percentile over the night's
+  movement (wake episodes excluded) sets the threshold, and a leaky integrator requires
+  the rise to be *sustained* rather than a twitch. Window 10–60 min, four sensitivities.
+- **A configurable wake escalation** — sound joins after a few minutes and ramps in
+  volume on watches with a speaker, while the vibration is at full strength from the
+  first buzz. (A gentle vibration start is available but off by default: a repeated
+  too-gentle stimulus trains a sleeper to ignore the channel.) Presets Gentle / Normal /
+  Insistent differ in buzz gap, when sound joins and how long the ring lasts; a Custom
+  profile exposes all twelve numbers.
+- **Up to 8 alarms**, each with weekday repeat or one-time firing, enable/disable,
+  skip-next and snooze.
+- **A stop gesture you cannot perform in your sleep** — two presses of any ring-screen
+  button: top snoozes, bottom stops, middle opens a snooze-length menu (5–60 min). A
+  single press only shows what the second would do, and `BACK` deliberately does nothing
+  while the alarm rings.
+- **A waiting screen before the alarm** (Off/15/30/60/90 min, default an hour ahead). Wake
+  by yourself at 06:40 and the screen is already there — two presses end the alarm, with
+  no menu to find in the dark.
+- **A "Last night" summary on the watch** — sleep onset, the movement baseline, what
+  triggered the alarm, and when it would have fired at each other sensitivity. This is the
+  calibration tool: tune the sensitivity from your own data instead of guessing.
+- **Phone-side configuration** via a Clay config page. The watch shows state and offers
+  quick actions; there is no on-watch editing.
 
-**[docs/how-it-works.md](docs/how-it-works.md)** — suomeksi
-**[docs/how-it-works.fi.md](docs/how-it-works.fi.md)** — explains what the app actually
-does — what the alarm time means, how the wake threshold is derived from your
-own night, how the escalation and snooze behave, when the app is running at
-all, and what every setting changes. It is written for someone using the alarm
-rather than maintaining it, and its charts are drawn from a real recorded
-night rather than from illustrative data.
+## Requirements
 
-## Platform limits
+- **The smart alarm needs the watch's activity/sleep tracking switched on.** Without it
+  the app is a plain alarm clock with the same escalation.
+- **The sound stage needs a speaker** — Pebble Time 2 (emery) and Pebble 2 Duo (flint).
+  Elsewhere the escalation is vibration and backlight, and a vibration ramp you turned on
+  compresses so it still reaches full strength instead of stopping halfway.
+- **Keep the watch charged: no app alarm can ring in the watch's low-power mode.**
+  PebbleOS disables the wakeup service every app alarm depends on; only the built-in
+  alarm service survives there. See
+  [how it works §5](docs/how-it-works.md#5-when-the-app-is-actually-running).
+- Platforms: **basalt, diorite, emery, flint**. aplite has no Health API for the smart
+  alarm to read; chalk's round display clips the left edge of every screen this app draws.
 
-- **The smart alarm needs the watch's activity/sleep tracking switched on**,
-  and is **not available on aplite** (Pebble Classic / Pebble Steel have no
-  motion-sensing API to read sleep data from). On aplite the app is a plain
-  alarm clock with the same gradual escalation, just without the smart
-  timing.
-- **The escalation's sound stage needs a speaker** — Pebble Time 2 (emery) and
-  Pebble 2 Duo (flint). On other platforms the escalation is vibration and
-  backlight only; when there's no speaker (or it's muted), the vibration ramp
-  compresses so it still reaches full strength instead of silently stopping
-  halfway.
-- **No app alarm can ring in the watch's low-power mode.** PebbleOS disables the
-  wakeup service below `RunLevel_Normal`/`Stationary`, and every alarm this app
-  schedules is a wakeup; the *built-in* alarm service is explicitly enabled at
-  `RunLevel_LowPower` and a third-party app cannot be. Keep the watch charged.
-- Target platforms: basalt, diorite, emery, flint. **aplite** is out because that
-  generation has no Health API for the smart alarm to read (and its inbox had
-  fallen to 644 B against a 414 B worst case). **chalk** (Pebble Time Round) is
-  out because the round display clips the left edge of every screen this app
-  draws — the title, the alarm times and the whole "Last night" text — which is
-  per-platform layout work nobody has done or tested (checked on the emulator
-  2026-08-07). **gabbro** is untried.
+## Building & running
 
-Developed as a submodule of the private `pebble-timetracking` superrepo,
-alongside the other Sykerö Pebble apps (TimeStyle, Track Work Time, MIDI
-Recorder, Countdown timer, Tuya Lights).
-
-## Build
-
-```bash
-pebble build
-pebble install --emulator diorite   # or emery for the 200px colour boards
+```sh
+pebble build                          # build for all targetPlatforms
+pebble install --emulator diorite     # or emery for the 200px colour boards
+pebble install --cloudpebble app.pbw  # install to a paired phone via the cloud relay
 ```
 
-(`basalt` crashes headless during clock-face rendering — an unrelated,
-board-specific pebble-fctx issue seen across this project's apps; use
-diorite/emery for emulator work.)
+`basalt` crashes headless during clock-face rendering — an unrelated, board-specific
+pebble-fctx issue seen across this project's apps; use diorite or emery for emulator work.
 
 ## Test
 
-```bash
+```sh
 npm test
 ```
 
-Runs the JS test suite (`node --test tests/*.test.js`, covering the pack
-contract and Clay config) **and** every host-side C test suite
-(`tests/run_c_tests.sh`, plain-gcc host builds of `alarm_calc`, `escalation`,
-`sleep_eval` and the phone↔watch pack contract) — no Pebble SDK or emulator
-needed for either.
+Runs the JS suite (`node --test tests/*.test.js` — AppMessage packing, config sync and the
+Clay config page) **and** every host-side C suite (`tests/run_c_tests.sh` — plain-gcc
+builds of `alarm_calc`, `escalation`, `sleep_eval`, the sleep-session reader, `night_text`
+and the phone↔watch pack contract). Neither needs the Pebble SDK or an emulator.
 
-> The **Test alarm** and **Diagnostics** rows ship in every build and are both
-> hidden until the phone-side "Debugging" toggle is switched on — there is no
-> compile flag to remember at release time. See "Sending a diagnostic report"
-> below.
+## Project layout
 
-## Design docs
+```
+src/c/alarm_calc.c    when an alarm is next due, and what its window is   ] pure C,
+src/c/escalation.c    the vibration/sound/backlight ramp                  ] no SDK
+src/c/sleep_eval.c    baseline, threshold and the fire decision           ] calls,
+src/c/night_text.c    the "Last night" summary text                       ] host-tested
+src/c/scheduler.c     wakeups, run state, the alarm cycle
+src/c/health_read.c   reading Pebble Health's minute history
+src/c/alarm_store.c   persisted alarms + config
+src/c/main.c          windows, menus and the ring screen
+src/ts/               phone side in TypeScript — Clay config + AppMessage packing
+src/pkjs/             GENERATED from src/ts/ by tsc (gitignored — never edit)
+docs/                 how-it-works (EN/FI) and the diagnostic-report guide
+```
 
-Specs and implementation plans live in the superrepo, under
-`docs/superpowers/{specs,plans}/`, not in this repository — this repo is
-public, and design docs are kept in the (permanently private) superrepo by
-convention across all of Sykerö's Pebble apps.
+The four pure modules hold the hard logic and are the ones worth testing; keep SDK calls
+out of them. Only modules touching `struct tm` need the `#ifdef __ARM_EABI__` include seam
+in their header — the SDK ships no `<time.h>`.
 
-## Sending a diagnostic report
+## Documentation
 
-If the smart alarm wakes you at a bad moment — or does not wake you — the watch can
-write down exactly what it measured and decided. The report is plain text: you can read
-it before you send it, and you send it yourself.
+- [How it works](docs/how-it-works.md) · [Miten se toimii](docs/how-it-works.fi.md) — the
+  user-facing reference, and the argument for every decision the app makes.
+- [Sending a diagnostic report](docs/diagnostic-report.md) — how to capture what the watch
+  measured on a night it got wrong.
+- Full SDK docs, tutorials and API reference: <https://developer.repebble.com>
 
-It needs a terminal and a GitHub account, because the watch's log is only reachable
-through the Pebble developer tool. If that is not for you, open **Last night** on the
-watch and photograph the screen instead; it carries the numbers that matter most.
+Specs and implementation plans are kept outside this repository, in the private superrepo
+this app is developed in — a convention shared by all of Sykerö's Pebble apps.
 
-1. On your phone, in this app's settings, turn on **Debugging → Show the Diagnostics
-   and Test alarm menu items**.
-2. Install the Pebble tool (needs Python 3.10–3.13):
-   `uv tool install --python 3.13 pebble-tool`
-3. `pebble login` — sign in with **the same GitHub account as the Pebble app on your
-   phone**.
-4. In the Pebble app: **Devices → ⋯ → Enable Dev Connect**, signing in with that same
-   account.
-5. `pebble logs --cloudpebble`
-6. On the watch, open **Smart Alarm → Diagnostics**. Leave the app open for about ten
-   seconds; the report is written in small bursts.
-7. Copy everything from `DBG ---- dump begin ----` to `DBG ---- dump end ----` from
-   the terminal and attach it to your report. `pebble logs` prefixes every line with a
-   timestamp and source location, so a line does not begin with `DBG` — it contains it.
+## Support
 
-**Run it the same morning.** The minute-by-minute movement data covers only the night
-around the alarm that rang most recently, and it is not stored — the watch re-reads it
-from Pebble Health each time. The seven night summaries are stored and survive, so a
-later report is still useful, just less detailed.
+Questions, feedback or bug reports: <pebble.smartalarm@sykero.fi>
+
+Browse all Sykerö Software apps on the Pebble appstore:
+<https://apps.repebble.com/apps/dev/syker-software_9f6c9c6e9ce88af6a0db953e>
 
 ## Licence
 
