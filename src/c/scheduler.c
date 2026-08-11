@@ -2,6 +2,34 @@
 #include "scheduler.h"
 #include <pebble.h>
 
+// Whether PebbleOS may tell the user, at the next boot, that this wakeup went
+// by while the watch was off.
+//
+// TRUE FOR WC_DEADLINE ONLY, and the narrowness is the whole point. A missed
+// deadline is the one cookie whose absence means, unambiguously, "the alarm did
+// not ring" -- and that case has no other feedback anywhere: the ring never
+// started, so RunState.missed[] (set only by the over_cap path in main.c, i.e. a
+// ring nobody answered) stays clear, and the stale occurrence is then dropped
+// silently at the next launch because ac_dispatch_wakeup refuses a deadline
+// older than AC_SERVED_TOLERANCE_S. Without this flag the user cannot tell "the
+// watch was off" from "this app is broken", which for an alarm clock is the
+// failure that costs trust.
+//
+// Every other cookie must stay false, for four separate reasons:
+//   - WC_WINDOW / WC_PREALARM: missing these does NOT mean a missed alarm. If
+//     the watch comes back before the deadline the alarm still rings, so the
+//     warning would be untrue.
+//   - WC_DST / WC_REENTRY: pure housekeeping, never the user's business.
+//   - The firmware does NOT deduplicate. prv_update_events_callback appends one
+//     AppInstallId per expired entry, so N flagged cookies expiring together
+//     list this app N times in the same dialog.
+//   - The same popup path also runs on any significant clock change
+//     (wakeup_handle_significant_clock_change: >15 s, timezone or DST), so a
+//     flagged daily WC_DST would raise a warning on an ordinary timezone change.
+static bool prv_notify_if_missed(WakeCookie cookie) {
+  return cookie == WC_DEADLINE;
+}
+
 time_t sc_schedule(time_t when, WakeCookie cookie) {
   if (when <= time(NULL)) {
     APP_LOG(APP_LOG_LEVEL_INFO, "wakeup %d declined: requested time already past",
@@ -16,7 +44,7 @@ time_t sc_schedule(time_t when, WakeCookie cookie) {
     if (t <= time(NULL)) {
       continue;
     }
-    WakeupId id = wakeup_schedule(t, (int32_t)cookie, false);
+    WakeupId id = wakeup_schedule(t, (int32_t)cookie, prv_notify_if_missed(cookie));
     if (id >= 0) {
       if (k_shift_min[i] != 0) {
         APP_LOG(APP_LOG_LEVEL_INFO, "wakeup %d shifted %+d min (E_RANGE)",

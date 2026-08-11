@@ -22,6 +22,12 @@ typedef enum {
 // Schedule `cookie` at `when`. On E_RANGE (another app already owns a wakeup
 // within a minute) the time is shifted by +1, -1, +2, -2 minutes and retried;
 // returns the time actually scheduled, or 0 if every attempt failed.
+//
+// WC_DEADLINE is scheduled with PebbleOS's notify_if_missed flag set, so a
+// deadline that passes while the watch is off raises the firmware's boot popup;
+// every other cookie is scheduled without it. See prv_notify_if_missed in the
+// .c file for why the flag is this narrow -- it is a deliberate policy, not an
+// oversight, and widening it produces duplicate and untrue warnings.
 time_t sc_schedule(time_t when, WakeCookie cookie);
 
 // Cancel every wakeup this app owns.
