@@ -90,8 +90,8 @@ typedef struct {
   uint8_t  snooze_min;             // 0..60 (0 == snoozing off)
   uint8_t  snooze_max;             // 0..20, 0 == unlimited
   uint16_t snooze_ramp_offset_s;   // seconds added to `elapsed` per snooze
-  // Off by default: full-strength vibration from the first burst. See
-  // esc_flatten_ramp for why a gentle start is a hazard rather than a courtesy.
+  // ON by default since 2026-08-20: a faint start that tightens. Off gives
+  // full-strength vibration from the first burst -- see esc_flatten_ramp.
   bool     esc_ramp_vib;
   // Reveals the watch's Diagnostics menu row. Off by default; a user turns it on
   // from the phone only when producing a bug report. Runtime rather than a

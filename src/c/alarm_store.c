@@ -128,7 +128,11 @@ void as_load_config(Config *out) {
     // request to be woken, not an accumulating punishment. The slider is still
     // there for anyone who wants the old behaviour.
     out->snooze_ramp_offset_s = 0;
-    out->esc_ramp_vib = false;   // explicit: the flattened vibration is the default
+    // On since 2026-08-20. It shipped off, on the reasoning recorded in
+    // escalation.h; a season of using it on found no habituation, and the user
+    // asked for the gentler start as the default. Existing installs keep
+    // whatever they have persisted -- only a fresh one sees this.
+    out->esc_ramp_vib = true;
     out->debug_features = false;   // explicit: a released app shows no debug row
   }
   esc_clamp(&out->esc);
@@ -222,8 +226,8 @@ int as_load_nights(NightSummary *out, int max) {
 // The single funnel every escalation read goes through (the ring loop, the "awake
 // by" pre-roll in scheduler.c, and the Last-night screen), which is why the
 // flatten switch belongs here rather than at each call site. Applies to the Custom
-// profile too -- otherwise the ramp, and its habituation hazard, walks straight
-// back in through Custom.
+// profile too -- otherwise the ramp walks straight back in through Custom
+// regardless of the switch.
 void as_effective_esc(const Config *cfg, EscParams *out) {
   if (cfg->wake_profile == ESC_PROFILE_CUSTOM) {
     *out = cfg->esc;

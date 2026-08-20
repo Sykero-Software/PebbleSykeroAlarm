@@ -160,10 +160,11 @@ test('live change: turning the smart alarm off hides its detail fields', () => {
 // picker, which was never verified and would have stalled it at slot 2.
 // config_clay.test.js asserts the page has no Slot<N>* items left.
 
-test('ramp-only Custom fields are hidden when the vibration ramp is off (the default)', () => {
+test('ramp-only Custom fields are hidden when the vibration ramp is off', () => {
   // With the ramp off these four control nothing: the gap it would tighten TO, the
   // time it would tighten OVER, and the pulse length/count it would start FROM.
-  const c = render({ 'wake-profile': '3' });   // Custom, esc-ramp defaults to false
+  // esc-ramp has to be set explicitly: it defaults to ON since 2026-08-20.
+  const c = render({ 'wake-profile': '3', 'esc-ramp': false });
   assert.strictEqual(c.byId['esc-min'].shown, false);
   assert.strictEqual(c.byId['esc-tighten'].shown, false);
   assert.strictEqual(c.byId['esc-vibstart'].shown, false);
@@ -174,8 +175,8 @@ test('ramp-only Custom fields are hidden when the vibration ramp is off (the def
   assert.strictEqual(c.byId['esc-pmax'].shown, true, 'the pulses per buzz');
 });
 
-test('ramp-only Custom fields appear when the vibration ramp is switched on', () => {
-  const c = render({ 'wake-profile': '3', 'esc-ramp': true });
+test('ramp-only Custom fields appear when the vibration ramp is on (the default)', () => {
+  const c = render({ 'wake-profile': '3' });   // Custom, esc-ramp defaults to true
   assert.strictEqual(c.byId['esc-min'].shown, true);
   assert.strictEqual(c.byId['esc-tighten'].shown, true);
   assert.strictEqual(c.byId['esc-vibstart'].shown, true);
@@ -189,8 +190,17 @@ test('ramp-only fields stay hidden outside Custom even with the ramp on', () => 
   assert.strictEqual(c.byId['esc-tighten'].shown, false);
 });
 
-test('live change: switching the ramp on reveals the ramp-only fields', () => {
-  const c = render({ 'wake-profile': '3' });
+test('live change: switching the ramp off hides the ramp-only fields', () => {
+  const c = render({ 'wake-profile': '3' });   // ramp on by default
+  assert.strictEqual(c.byId['esc-tighten'].shown, true);
+  c.byId['esc-ramp'].value = false;
+  c.byId['esc-ramp'].changeHandlers.forEach((fn) => fn());
+  assert.strictEqual(c.byId['esc-tighten'].shown, false);
+  assert.strictEqual(c.byId['esc-vibstart'].shown, false);
+});
+
+test('live change: switching the ramp back on reveals them again', () => {
+  const c = render({ 'wake-profile': '3', 'esc-ramp': false });
   assert.strictEqual(c.byId['esc-tighten'].shown, false);
   c.byId['esc-ramp'].value = true;
   c.byId['esc-ramp'].changeHandlers.forEach((fn) => fn());

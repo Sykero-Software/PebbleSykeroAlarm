@@ -23,12 +23,12 @@ drawn from a real recorded night rather than from illustrative data.
 - **A smart alarm built from your own baseline** — a percentile over the night's
   movement (wake episodes excluded) sets the threshold, and a leaky integrator requires
   the rise to be *sustained* rather than a twitch. Window 10–60 min, four sensitivities.
-- **A configurable wake escalation** — sound joins after a few minutes and ramps in
-  volume on watches with a speaker, while the vibration is at full strength from the
-  first buzz. (A gentle vibration start is available but off by default: a repeated
-  too-gentle stimulus trains a sleeper to ignore the channel.) Presets Gentle / Normal /
-  Insistent differ in buzz gap, when sound joins and how long the ring lasts; a Custom
-  profile exposes all twelve numbers.
+- **A configurable wake escalation** — the vibration starts as a faint tap and tightens
+  over a few minutes, and sound joins later and ramps in volume on watches with a
+  speaker. (One switch makes the vibration full strength from the very first buzz
+  instead, for a sleeper who finds a gentle start easy to sleep through.) Presets
+  Gentle / Normal / Insistent differ in buzz gap, when sound joins and how long the ring
+  lasts; a Custom profile exposes all twelve numbers.
 - **Up to 8 alarms**, each with weekday repeat or one-time firing, enable/disable,
   skip-next and snooze.
 - **A stop gesture you cannot perform in your sleep** — two presses of any ring-screen

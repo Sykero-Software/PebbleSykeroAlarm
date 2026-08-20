@@ -142,12 +142,16 @@ the alarm time.
 A ring is a series of **bursts** — a few vibration pulses, then a gap, repeat. Sound
 joins later, if the watch has a speaker (only some models do).
 
-**By default the vibration does not ramp.** It is at full strength from the first
-buzz, at a constant gap, and only the sound ramps up. This is deliberate and it is a
-safety argument rather than a preference: a repeated too-gentle stimulus trains a
-sleeper to ignore that channel, and degrades the stronger pulses that follow it.
-Turning **"Ramp the vibration up"** on restores a gentle start that tightens over
-several minutes.
+**By default the vibration ramps up.** It starts as a faint tap and tightens over
+several minutes, at a constant gap, and the sound ramps too. Turning **"Ramp the
+vibration up"** off makes the vibration full strength from the very first buzz
+instead, leaving only the sound to ramp.
+
+Which of the two wakes you better is a preference, and worth trying both ways. The
+one argument on record for the flat version is that a repeated faint stimulus
+*might* train a sleeper to sleep through that channel, and through the stronger
+pulses after it — reasoning rather than a measurement, and the setting exists so a
+sleeper who does find that happening can switch it off.
 
 The **wake style** presets differ in gap, how long the ring lasts before it gives
 up, when sound joins, and how loud it gets:
@@ -308,7 +312,7 @@ Custom; otherwise the preset supplies those numbers.
 
 | Setting | Default | What it changes |
 |---|---|---|
-| Ramp the vibration up | **off** | On: a gentle start that tightens. Off: full strength from the first buzz |
+| Ramp the vibration up | **on** | On: a gentle start that tightens. Off: full strength from the first buzz |
 | Wake style | Normal | A preset for all twelve numbers below |
 
 **A "wake style" is exactly these twelve numbers**, and choosing Custom starts you

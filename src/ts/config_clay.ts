@@ -124,13 +124,13 @@ export function buildConfig(): any[] {
   items.push({ type: 'section', items: [
     { type: 'heading', defaultValue: 'How it wakes you' },
     { type: 'text', defaultValue:
-        'Vibration buzzes at full strength from the very first buzz, with a '
-      + 'steady gap between buzzes. Sound joins later and gets louder.' },
+        'The vibration starts as a faint tap and tightens over a few minutes, '
+      + 'with a steady gap between buzzes. Sound joins later and gets louder.' },
     { type: 'toggle', messageKey: 'EscRampVib',
-      label: 'Ramp the vibration up', defaultValue: false, id: 'esc-ramp',
-      description: 'Off is recommended. When on, the vibration starts as a faint '
-                 + 'tap and grows — which can teach you to sleep through it, and '
-                 + 'through the stronger buzzes that follow.' },
+      label: 'Ramp the vibration up', defaultValue: true, id: 'esc-ramp',
+      description: 'On starts as a faint tap and tightens over a few minutes. '
+                 + 'Off is at full strength from the very first buzz. Which one '
+                 + 'wakes you better is a matter of taste.' },
     { type: 'select', messageKey: 'WakeProfile', label: 'Wake style',
       defaultValue: '1', id: 'wake-profile',
       options: [
@@ -139,10 +139,11 @@ export function buildConfig(): any[] {
         { label: 'Insistent', value: '2' },
         { label: 'Custom', value: '3' },
       ] },
-    // Labels are worded for the ramp-OFF default, where these three ARE the buzz:
+    // Labels are worded for the ramp OFF, where these three ARE the buzz:
     // lead_gap is the only gap, vib_max the only pulse length, pulses_max the only
-    // count. With the ramp on they become the starting/final ends of it, which the
-    // descriptions say -- the four ramp-only sliders below are hidden when it is off.
+    // count. With the ramp on -- the default since 2026-08-20 -- they become the
+    // starting/final ends of it, which the descriptions say; the four ramp-only
+    // sliders below are hidden when it is off.
     { type: 'slider', messageKey: 'EscLeadGapS', label: 'Custom: gap between buzzes (s)',
       defaultValue: 30, min: 2, max: 120, step: 1, id: 'esc-lead',
       description: 'With the ramp on, this is the first gap only.' },

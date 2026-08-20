@@ -50,12 +50,15 @@ void esc_profile(uint8_t profile_id, EscParams *out);
 // a constant gap. The sound stage is deliberately untouched — it still joins at
 // sound_after_s and still ramps vol_start -> vol_max.
 //
-// This is the DEFAULT (config `esc_ramp_vib` off). A vibration that starts below
-// the threshold that wakes a given sleeper trains them to sleep through the
-// channel, which degrades the later strong pulses too — so the alarm must be at
-// full strength from the first buzz, and only its *frequency* varies. The user
-// chose to keep the ramp available rather than delete it (2026-07-31), hence a
-// switch rather than new profile constants.
+// Selected by config `esc_ramp_vib` being off. It shipped as the DEFAULT, on the
+// reasoning that a vibration starting below the threshold which wakes a given
+// sleeper could train them to sleep through the channel and degrade the later
+// strong pulses too. That is reasoning, not a measurement: after a season on the
+// wrist with the ramp ON the user reported no such effect and asked for the ramp
+// as the default (2026-08-20). So this is now the opt-OUT path, and the argument
+// above is why it stays available rather than being deleted -- a sleeper who does
+// habituate needs it. Either way only the vibration is touched; the sound stage
+// ramps in both.
 //
 // Collapses tighten_s as well, which is not cosmetic: esc_full_development_s
 // feeds the "awake by HH:MM" semantics, so leaving tighten_s at 360-600 s would

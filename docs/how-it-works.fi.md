@@ -142,12 +142,16 @@ se ei olisi laukaissut lainkaan — sinut olisi herättänyt herätysaika.
 Soitto on sarja **purskeita** — muutama värinäsykäys, sitten tauko, ja uudestaan. Ääni
 liittyy mukaan myöhemmin, jos kellossa on kaiutin (vain osassa malleista on).
 
-**Oletuksena värinä ei voimistu.** Se on täydellä voimalla ensimmäisestä purskeesta
-lähtien, tasavälein, ja vain ääni voimistuu. Tämä on tarkoituksellista, ja perustelu
-on turvallisuus eikä maku: toistuva liian hento ärsyke opettaa nukkujan sivuuttamaan
-sen kanavan, ja heikentää myös sen jälkeen tulevia voimakkaampia sykäyksiä. Asetus
-**"Ramp the vibration up"** palauttaa hennon aloituksen, joka tiukkenee muutaman
-minuutin kuluessa.
+**Oletuksena värinä voimistuu.** Se aloittaa hennolla napautuksella ja tiukkenee
+muutaman minuutin kuluessa, tasavälein, ja myös ääni voimistuu. Asetus **"Ramp the
+vibration up"** pois päältä tekee värinästä täysivoimaisen heti ensimmäisestä
+purskeesta, jolloin vain ääni voimistuu.
+
+Kumpi herättää sinut paremmin on makuasia, ja kannattaa kokeilla molempia. Yksi
+peruste tasaisen version puolesta on kirjattuna: toistuva hento ärsyke *voisi*
+opettaa nukkujan sivuuttamaan sen kanavan, ja myös sen jälkeen tulevat voimakkaammat
+sykäykset — päättelyä, ei mittausta, ja asetus on olemassa jotta nukkuja joka
+havaitsee niin käyvän voi kytkeä sen pois.
 
 **Wake style** -esiasetukset eroavat toisistaan tauon pituudessa, siinä kuinka kauan
 soitto kestää ennen luovuttamista, milloin ääni liittyy mukaan ja kuinka kovaa siitä
@@ -311,7 +315,7 @@ Custom-tilaan; muuten esiasetus antaa nuo luvut.
 
 | Asetus | Oletus | Mitä se muuttaa |
 |---|---|---|
-| Ramp the vibration up | **pois** | Päällä: hento aloitus joka tiukkenee. Pois: täysi voima ensimmäisestä purskeesta |
+| Ramp the vibration up | **päällä** | Päällä: hento aloitus joka tiukkenee. Pois: täysi voima ensimmäisestä purskeesta |
 | Wake style | Normal | Esiasetus kaikille kahdelletoista alla olevalle luvulle |
 
 **"Wake style" on täsmälleen nämä kaksitoista lukua**, ja Custom-valinta lähtee
