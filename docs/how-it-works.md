@@ -344,8 +344,8 @@ Normal comes down to 45 s versus 30 s between identical full-strength buzzes.
 
 | Setting | Default | What it changes |
 |---|---|---|
-| Snooze length | 10 min | What the top button means: 5, 10, 15, 20, 30, 45 or 60 min — the same lengths the middle button's menu offers. Off disables snoozing entirely (the top button then stops the alarm, and the middle button is inert) |
-| Snoozes allowed | 5 | Unlimited is allowed; the ring never goes silent because of it |
+| Snooze length | 10 min | What the top button means: 5, 10, 15, 20, 30, 45 or 60 min — the same lengths the middle button's menu offers. Off disables snoozing entirely — the top and middle buttons then do nothing, and only the bottom button (Stop) can end the ring |
+| Total snooze time | 30 min | How many MINUTES of snoozing are allowed in total before the top and middle buttons go inert too, however many presses that takes — not a count of presses. Unlimited is allowed; the ring never goes silent because of it. The middle button's menu only offers lengths that still fit the remaining time |
 | Each snooze starts this far along | 0 s | 0 restarts the ramp each time. Higher makes each snooze start stronger |
 
 ---

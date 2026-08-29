@@ -189,7 +189,7 @@ test('buildDict converts strings to ints and leaves AlarmSet a string', () => {
     WakeProfile: { value: '1' },
     EscRampVib: { value: false },
     SnoozeMin: { value: '10' },
-    SnoozeMax: { value: '5' },
+    SnoozeMax: { value: '30' },
   };
   const dict = buildDict(settings);
   assert.strictEqual(dict.AlarmSet, '07:00|1111100');

@@ -1575,6 +1575,14 @@ static void ring_up_multi(ClickRecognizerRef rec, void *ctx) {
   // which used to show "Press 2x to snooze" right before the second press
   // fell through to Stop. Reported from the wrist: a double-press meant only
   // to buy a few more minutes must not silently disable the whole alarm.
+  //
+  // Deliberately covers "snoozing off" too, not just "allowance spent
+  // mid-ring" (confirmed with the user 2026-08-29): UP used to double as an
+  // alternate Stop when Snooze length == Off (see the old how-it-works.md
+  // wording), but that made two DIFFERENT things -- the top button and the
+  // bottom button -- both mean Stop with no way to tell which is live from
+  // the screen, since the "+" hint already vanished for the same reason.
+  // One consistent rule now: no allowance, no promise, from either cause.
   if (snooze_exhausted()) {
     return;
   }
@@ -1628,12 +1636,30 @@ static void ring_select_multi(ClickRecognizerRef rec, void *ctx) {
   if (snooze_exhausted()) {
     return;
   }
+  // The remaining budget (snooze_exhausted() above already guarantees this is
+  // > 0 when snooze_max_min is capped). A menu length longer than what is left
+  // would let one choice blow straight through the total-minute cap the user
+  // configured -- e.g. cap=30, used=25, picking "60 min" would land at 85. So
+  // filter the offered lengths to what still fits, same as UP silently offers
+  // only its own fixed snooze_min (already checked by the guard above). If
+  // NOTHING fits (remaining < the shortest option), there is nothing left to
+  // offer -- same as snoozing being fully exhausted.
+  uint16_t remaining = (s_cfg.snooze_max_min == 0)
+      ? UINT16_MAX : (uint16_t)(s_cfg.snooze_max_min - s_rs.snooze_used_min);
+  unsigned fit_count = 0;
+  for (unsigned i = 0; i < ARRAY_LENGTH(SNOOZE_MENU_MIN); i++) {
+    if (SNOOZE_MENU_MIN[i] <= remaining) { fit_count++; }
+  }
+  if (fit_count == 0) {
+    return;
+  }
   if (click_number_of_clicks_counted(rec) < STOP_PRESSES) {
     show_press_again_hint("choose a snooze");
     return;
   }
-  ActionMenuLevel *root = action_menu_level_create(ARRAY_LENGTH(SNOOZE_MENU_MIN));
+  ActionMenuLevel *root = action_menu_level_create(fit_count);
   for (unsigned i = 0; i < ARRAY_LENGTH(SNOOZE_MENU_MIN); i++) {
+    if (SNOOZE_MENU_MIN[i] > remaining) { continue; }
     action_menu_level_add_action(root, SNOOZE_MENU_LABELS[i], snooze_menu_perform,
                                  (void *)(uintptr_t)SNOOZE_MENU_MIN[i]);
   }

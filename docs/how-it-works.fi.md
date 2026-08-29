@@ -348,8 +348,8 @@ täysvoimaisia purskeita 45 vai 30 sekunnin välein.
 
 | Asetus | Oletus | Mitä se muuttaa |
 |---|---|---|
-| Snooze length | 10 min | Mitä ylänappi tarkoittaa: 5, 10, 15, 20, 30, 45 tai 60 min — samat pituudet jotka keskinapin valikko tarjoaa. Off poistaa torkun kokonaan (ylänappi pysäyttää silloin herätyksen ja keskinappi on tehoton) |
-| Snoozes allowed | 5 | Unlimited on sallittu; soitto ei koskaan hiljene sen takia |
+| Snooze length | 10 min | Mitä ylänappi tarkoittaa: 5, 10, 15, 20, 30, 45 tai 60 min — samat pituudet jotka keskinapin valikko tarjoaa. Off poistaa torkun kokonaan — ylä- ja keskinappi eivät silloin tee mitään, ja vain alanappi (Stop) pysäyttää herätyksen |
+| Total snooze time | 30 min | Kuinka monta MINUUTTIA torkkua saa käyttää yhteensä ennen kuin ylä- ja keskinappi muuttuvat tehottomiksi, riippumatta painallusten määrästä — ei siis painalluskertojen määrä. Unlimited on sallittu; soitto ei koskaan hiljene sen takia. Keskinapin valikko tarjoaa vain pituudet jotka vielä mahtuvat jäljellä olevaan aikaan |
 | Each snooze starts this far along | 0 s | 0 aloittaa voimistumisen alusta joka kerta. Suurempi arvo saa jokaisen torkun alkamaan voimakkaampana |
 
 ---
