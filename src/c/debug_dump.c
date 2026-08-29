@@ -194,8 +194,8 @@ static void prv_dump_head(void) {
           (unsigned)s_cfg->sens_percentile, (unsigned)s_cfg->sens_minutes,
           (unsigned)s_cfg->wake_profile);
   APP_LOG(APP_LOG_LEVEL_INFO,
-          "DBG cfg2 snz=%u/%u off=%u rampvib=%d v=%u",
-          (unsigned)s_cfg->snooze_min, (unsigned)s_cfg->snooze_max,
+          "DBG cfg2 snz_len=%u snz_max_min=%u off=%u rampvib=%d v=%u",
+          (unsigned)s_cfg->snooze_min, (unsigned)s_cfg->snooze_max_min,
           (unsigned)s_cfg->snooze_ramp_offset_s,
           (int)s_cfg->esc_ramp_vib, (unsigned)s_cfg->version);
 
@@ -210,12 +210,14 @@ static void prv_dump_head(void) {
   // at the alarm time after an early one is a chain of snoozes if snz > 0, and a
   // deadline that was never cancelled if snz == 0.
   APP_LOG(APP_LOG_LEVEL_INFO,
-          "DBG rs slot=%d win=%s ring=%s dl=%s snz=%u unavail=%d missed=%02x",
+          "DBG rs slot=%d win=%s ring=%s dl=%s snz=%u snz_used_min=%u unavail=%d "
+          "missed=%02x",
           (int)s_rs->pending_slot,
           prv_fmt_t((time_t)s_rs->window_started_at, a, sizeof a),
           prv_fmt_t((time_t)s_rs->ring_started_at, b, sizeof b),
           prv_fmt_t((time_t)s_rs->deadline_at, c, sizeof c),
-          (unsigned)s_rs->snooze_count, (int)s_rs->smart_unavailable, missed);
+          (unsigned)s_rs->snooze_count, (unsigned)s_rs->snooze_used_min,
+          (int)s_rs->smart_unavailable, missed);
   char d[20];
   // The double-ring fix's whole state: which occurrence has already rung. A ring
   // that ended early must leave this set, or the same occurrence is armed again.

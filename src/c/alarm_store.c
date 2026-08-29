@@ -119,7 +119,8 @@ void as_load_config(Config *out) {
     out->wake_profile = ESC_PROFILE_NORMAL;
     esc_profile(ESC_PROFILE_NORMAL, &out->esc);
     out->snooze_min = 10;
-    out->snooze_max = 5;
+    out->snooze_max_min = 30;   // total minutes, not a count -- see the
+                                // CONFIG_VERSION 5 -> 6 note in alarm_store.h
     // 0 since 2026-08-03: every snooze restarts the ramp from the beginning.
     // Was 120, which made each snooze start two minutes further along -- and with
     // the vibration ramp switched ON that is felt directly, as a second alarm

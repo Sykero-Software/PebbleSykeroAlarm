@@ -268,24 +268,25 @@ static void reload_and_rearm(void) {
 // --- The RunState alarm CYCLE: the single owner of the five fields that
 // describe "the alarm we are currently dealing with".
 //
-// pending_slot, window_started_at, deadline_at, ring_started_at and snooze_count
-// are one unit: they are meaningful only together, for the span from a smart
-// window opening (or a deadline ringing) until the ring is dismissed. Four call
-// sites used to set or clear four DIFFERENT subsets of them by hand, and that
-// asymmetry -- not a single missing line -- is what produced the whole-branch
-// review's Critical 1: deadline_at was written by two paths (start_ring and
-// open_smart_window) and cleared by NONE, so after the very first ring it held
-// yesterday's ring instant forever. The next night's WC_WINDOW then read a
-// deadline ~24 h in the past, concluded the deadline had passed, and rang
-// immediately AT WINDOW START -- up to 60 minutes early, with the smart window
-// never opening again, and record_night reporting "smart alarm unavailable".
-// The README's own "Test alarm in 2 min" validation step was enough to poison
-// the state before the user's first real night.
+// pending_slot, window_started_at, deadline_at, ring_started_at, snooze_count
+// and snooze_used_min are one unit: they are meaningful only together, for the
+// span from a smart window opening (or a deadline ringing) until the ring is
+// dismissed. Four call sites used to set or clear four DIFFERENT subsets of
+// them by hand, and that asymmetry -- not a single missing line -- is what
+// produced the whole-branch review's Critical 1: deadline_at was written by
+// two paths (start_ring and open_smart_window) and cleared by NONE, so after
+// the very first ring it held yesterday's ring instant forever. The next
+// night's WC_WINDOW then read a deadline ~24 h in the past, concluded the
+// deadline had passed, and rang immediately AT WINDOW START -- up to 60
+// minutes early, with the smart window never opening again, and record_night
+// reporting "smart alarm unavailable". The README's own "Test alarm in 2 min"
+// validation step was enough to poison the state before the user's first real
+// night.
 //
 // So: every mutation of the cycle goes through this pair. Nothing else may
-// assign these five fields, except ring_snooze_for's deliberate move of
-// ring_started_at/snooze_count WITHIN a live cycle (a snooze continues the
-// cycle, it does not begin or end one).
+// assign these six fields, except ring_snooze_for's deliberate move of
+// ring_started_at/snooze_count/snooze_used_min WITHIN a live cycle (a snooze
+// continues the cycle, it does not begin or end one).
 static void runstate_end_cycle(void) {
   APP_LOG(APP_LOG_LEVEL_INFO,
           "CYCLE end (was slot=%d window=%lu deadline=%lu ring=%lu snooze=%d)",
@@ -297,6 +298,7 @@ static void runstate_end_cycle(void) {
   s_rs.deadline_at = 0;
   s_rs.ring_started_at = 0;
   s_rs.snooze_count = 0;
+  s_rs.snooze_used_min = 0;
 }
 
 // Begin (or continue) the cycle for `slot`. `window_start` is 0 when no smart
@@ -314,6 +316,7 @@ static void runstate_begin_cycle(int slot, time_t window_start, time_t deadline,
   if (fresh) {
     s_rs.ring_started_at = 0;
     s_rs.snooze_count = 0;
+    s_rs.snooze_used_min = 0;
   }
   APP_LOG(APP_LOG_LEVEL_INFO,
           "CYCLE begin slot=%d window=%lu deadline=%lu fresh=%d",
@@ -405,7 +408,7 @@ static void inbox_received(DictionaryIterator *iter, void *context) {
   GET_INT(EscVolMax, esc.vol_max);
   GET_INT(EscCapS, esc.cap_s);
   GET_INT(SnoozeMin, snooze_min);
-  GET_INT(SnoozeMax, snooze_max);
+  GET_INT(SnoozeMax, snooze_max_min);
   GET_INT(SnoozeRampOffsetS, snooze_ramp_offset_s);
   GET_INT(PreAlarmMin, pre_alarm_min);
   GET_BOOL(EscRampVib, esc_ramp_vib);
@@ -1200,7 +1203,7 @@ static uint32_t ring_elapsed_s(void) {
 
   time_t now = time(NULL);
   uint32_t base = (uint32_t)s_rs.snooze_count * s_cfg.snooze_ramp_offset_s;
-  // Unlimited snoozing (snooze_max == 0) must never go silent: past a certain
+  // Unlimited snoozing (snooze_max_min == 0) must never go silent: past a certain
   // count, base alone already exceeds cap_s and esc_step would report
   // over_cap on the very first burst of the resumed ring even though the user
   // is actively pressing Snooze, not ignoring the alarm. Saturate against full
@@ -1399,44 +1402,47 @@ static void ring_stop_now(void) {
 
 // Is a snooze available at all right now? Snoozing switched off, or the
 // allowance spent, and there is nothing left to grant -- the SELECT menu has
-// nothing to offer, the "+" hint has nothing to promise, and (see
-// ring_snooze_for) a UP press has nothing to do but stop the alarm. One
-// predicate, used at all three sites: backlog items 25 and 30f are this app's
-// running record of what happens when the same "is a snooze possible" check
-// is hand-copied instead -- a loop fixed in one copy and left wrong in its
+// nothing to offer, the "+" hint has nothing to promise, and a UP press has
+// nothing to do either (both UP and SELECT go inert on this, and
+// ring_snooze_for re-checks it too, as defense-in-depth). One predicate,
+// used at all four sites: backlog items 25 and 30f are this app's running
+// record of what happens when the same "is a snooze possible" check is
+// hand-copied instead -- a loop fixed in one copy and left wrong in its
 // sibling, and a comment that told the truth about only one of two copies.
 static bool snooze_exhausted(void) {
   return s_cfg.snooze_min == 0
-      || (s_cfg.snooze_max != 0 && s_rs.snooze_count >= s_cfg.snooze_max);
+      || (s_cfg.snooze_max_min != 0 && s_rs.snooze_used_min >= s_cfg.snooze_max_min);
 }
 
 // `minutes` is the length THIS snooze runs for: s_cfg.snooze_min from the UP
 // button, or whatever the SELECT menu offered. Nothing else differs between the
-// two -- the snooze counts against snooze_max either way, bumps snooze_count and
-// therefore the ramp offset, and hands the screen to PENDING_SNOOZED.
+// two -- the snooze counts against snooze_max_min either way, bumps snooze_count
+// and therefore the ramp offset, and hands the screen to PENDING_SNOOZED.
 //
 // A menu snooze is ONE-OFF and needs no new state: ring_started_at already
 // carries the expiry, and sc_rearm uses it as-is (it explicitly does not re-add
 // snooze_min), so the next UP press still means the configured default.
 static void ring_snooze_for(uint16_t minutes) {
-  // Out of snoozes (or snoozing disabled) behaves as Stop rather than doing
-  // nothing, so UP is never inert -- it asks for "a" snooze, and Stop is the
-  // honest answer when there isn't one. SELECT is different (see
-  // ring_select_multi below): it asks for a SPECIFIC length from a menu, and
-  // answering "45 min" with "alarm stopped" would read as the app ignoring
-  // the number the user just picked -- so SELECT goes inert instead of
-  // reaching this branch at all, via the same snooze_exhausted() predicate.
+  // Both call sites (ring_up_multi's double-press and the SELECT menu via
+  // ring_select_multi) already guard on snooze_exhausted() before reaching
+  // here, so this is defense-in-depth, not the normal path. It used to fall
+  // through to ring_stop_now(), which -- for a one-time alarm -- silently
+  // DISABLED it (ring_stop_now sets enabled = false). Reported from the
+  // wrist: a user reaching for one more snooze must never end up switching
+  // the whole alarm off; do nothing and leave the ring running, forcing an
+  // explicit Stop.
   if (snooze_exhausted()) {
-    APP_LOG(APP_LOG_LEVEL_INFO, "SNOOZE exhausted -> stop");
-    ring_stop_now();
+    APP_LOG(APP_LOG_LEVEL_INFO, "SNOOZE exhausted -> ignored (must press Stop)");
     return;
   }
 
   uint32_t prev_ring_started_at = s_rs.ring_started_at;
   uint8_t  prev_snooze_count = s_rs.snooze_count;
+  uint16_t prev_snooze_used_min = s_rs.snooze_used_min;
 
   stop_ring_output();
   s_rs.snooze_count++;
+  s_rs.snooze_used_min += minutes;
   // ring_started_at is moved to the snooze expiry so ring_elapsed_s() resumes
   // from the right place, and so sc_rearm can re-derive the snooze wakeup after
   // a relaunch (it reads this field directly — see scheduler.c). Set and saved
@@ -1460,9 +1466,11 @@ static void ring_snooze_for(uint16_t minutes) {
   // caller of sc_rearm uses, so there is exactly one code path that computes
   // that wakeup rather than two that could disagree.
   bool armed = sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL), s_ringing);
-  APP_LOG(APP_LOG_LEVEL_INFO, "SNOOZE #%d for %u min until %lu (ramp offset %d s)",
+  APP_LOG(APP_LOG_LEVEL_INFO,
+          "SNOOZE #%d for %u min until %lu (ramp offset %d s, used %u/%u min)",
           s_rs.snooze_count, (unsigned)minutes, (unsigned long)until,
-          s_rs.snooze_count * s_cfg.snooze_ramp_offset_s);
+          s_rs.snooze_count * s_cfg.snooze_ramp_offset_s,
+          (unsigned)s_rs.snooze_used_min, (unsigned)s_cfg.snooze_max_min);
 
   if (!armed) {
     // The snooze wakeup itself could not be scheduled (every +/-2 min E_RANGE
@@ -1475,6 +1483,7 @@ static void ring_snooze_for(uint16_t minutes) {
     APP_LOG(APP_LOG_LEVEL_ERROR, "SNOOZE could not be armed -- staying ringing");
     s_rs.ring_started_at = prev_ring_started_at;
     s_rs.snooze_count = prev_snooze_count;
+    s_rs.snooze_used_min = prev_snooze_used_min;
     as_save_runstate(&s_rs);
     sc_schedule(time(NULL) + SC_REENTRY_GAP_S, WC_SNOOZE);
     // stop_ring_output() (called above) unsubscribed the minute tick and left
@@ -1560,6 +1569,15 @@ static void ring_down_multi(ClickRecognizerRef rec, void *ctx) {
 // the first press -- and a snooze IS a change: it silences a ringing alarm for
 // ten minutes. The first press only says what the second would do.
 static void ring_up_multi(ClickRecognizerRef rec, void *ctx) {
+  // Mirrors ring_select_multi below: with the allowance spent (or snoozing
+  // off) the "+" hint is already hidden (ring_window_load, same predicate),
+  // so this button has nothing left to promise -- not even on a single press,
+  // which used to show "Press 2x to snooze" right before the second press
+  // fell through to Stop. Reported from the wrist: a double-press meant only
+  // to buy a few more minutes must not silently disable the whole alarm.
+  if (snooze_exhausted()) {
+    return;
+  }
   if (click_number_of_clicks_counted(rec) >= STOP_PRESSES) {
     ring_snooze_for(s_cfg.snooze_min);
   } else {

@@ -56,12 +56,27 @@
 // this time. The version is still bumped, for the same reason the 2 -> 3 note
 // gives: relying on a size change is exactly the assumption the 1 -> 2 case
 // shows to be unsafe, so the explicit version stays the thing that decides it.
-#define CONFIG_VERSION    5
+//
+// Bumped 5 -> 6: snooze_max was repurposed from "how many times" to "how many
+// total minutes" of snoozing, without renaming the Clay messageKey (SnoozeMax)
+// or changing sizeof(Config). A stale v5 blob would pass the length check and
+// have its stored count (e.g. "5") silently misread as a much stricter minute
+// cap -- the exact trap the 1 -> 2 note warns about, this time from a meaning
+// change rather than a layout one. The version bump discards it; the phone's
+// launch handshake then resends the real (reinterpreted) setting.
+#define CONFIG_VERSION    6
 // Bumped 1 -> 2: RunState gained served_slot/served_at, the record of which alarm
 // occurrence has already rung. sizeof(RunState) changes, so as_load_runstate's
 // length check would discard a stale blob on its own; the bump states the intent
 // and matches the convention above. Discarding costs at most a pending snooze.
-#define RUNSTATE_VERSION  2
+//
+// Bumped 2 -> 3: RunState gained snooze_used_min, the running total of minutes
+// already snoozed this cycle (paired with the Config 5 -> 6 change above --
+// snooze_max is now a minute cap, not a count cap). sizeof(RunState) changes,
+// so the length check would catch a stale blob on its own; bumped anyway for
+// the same reason as every other bump here. Discarding costs at most a pending
+// snooze.
+#define RUNSTATE_VERSION  3
 // Bumped 1 -> 2 (Task 12 review): NightSummary gained fired_by_deadline, shifting
 // the byte offsets of alt_percentile/alt_fired_min within the persisted blob. A
 // stale v1 blob is discarded by as_load_nights' version check rather than being
@@ -88,7 +103,10 @@ typedef struct {
   uint8_t  wake_profile;           // ESC_PROFILE_*
   EscParams esc;                   // used when wake_profile == ESC_PROFILE_CUSTOM
   uint8_t  snooze_min;             // 0..60 (0 == snoozing off)
-  uint8_t  snooze_max;             // 0..20, 0 == unlimited
+  uint8_t  snooze_max_min;         // total minutes of snoozing allowed this
+                                    // cycle, 0 == unlimited (Clay key stays
+                                    // "SnoozeMax" -- see the CONFIG_VERSION
+                                    // 5 -> 6 note above)
   uint16_t snooze_ramp_offset_s;   // seconds added to `elapsed` per snooze
   // ON by default since 2026-08-20: a faint start that tightens. Off gives
   // full-strength vibration from the first burst -- see esc_flatten_ramp.
@@ -113,6 +131,10 @@ typedef struct {
   uint32_t ring_started_at;     // 0 when not ringing
   uint32_t deadline_at;         // the hard alarm time for pending_slot
   uint8_t  snooze_count;
+  uint16_t snooze_used_min;     // cumulative minutes snoozed this cycle, checked
+                                 // against Config.snooze_max_min; reset wherever
+                                 // snooze_count is (see runstate_end_cycle /
+                                 // runstate_begin_cycle in main.c)
   bool     smart_unavailable;   // set when the last window had no usable data
   bool     missed[MAX_ALARMS];  // hit the cap with nobody dismissing it
   // WHICH OCCURRENCE HAS ALREADY RUNG -- deliberately NOT part of the cycle (see
