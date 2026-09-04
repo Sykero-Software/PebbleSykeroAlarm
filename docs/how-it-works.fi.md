@@ -174,8 +174,8 @@ Kun soitto luovuttaa, se lakkaa pitämästä ääntä mutta jättää näytölle
 
 Kellon ja kahden nappitekstin alla alarivi kertoo yön, joka tähän johti:
 `Slept 1.7/6.5 h` — syvää unta tunteina kauttaviivalla unta yhteensä, samat kaksi
-lukua jotka kellon oma terveysdata ja TimeStylen unihelmi näyttävät. Torkkuruudulla
-on sama rivi, mutta kellon yläpuolella nappitekstien alan sijaan. Jos kello ei ole
+lukua jotka kellon oma terveysdata ja TimeStylen uni-widget näyttävät.
+Torkkuruudulla on sama rivi, mutta kellon yläpuolella eikä nappitekstien alla. Jos kello ei ole
 tallentanut lainkaan unta — terveysseuranta pois päältä, tai yö jota se ei nähnyt —
 rivi puuttuu kokonaan eikä näytä nollia.
 
