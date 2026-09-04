@@ -1179,8 +1179,10 @@ static TextLayer *s_ring_up;
 // The snooze length, small, directly under the "Snooze" label. A separate
 // layer because it is a separate font: one TextLayer draws one size, and the
 // word has to stay big enough to read at arm's length while the number does
-// not.
+// not. Its text buffer is file scope because ring_update_snooze_labels rewrites
+// it from outside ring_window_load, and a TextLayer keeps the pointer.
 static TextLayer *s_ring_up_sub;
+static char       s_ring_up_sub_text[12];   // "60 min" + slack
 static TextLayer *s_ring_down;
 static TextLayer *s_ring_hint;
 static TextLayer *s_ring_plus;
@@ -1254,26 +1256,86 @@ static uint32_t ring_elapsed_s(void) {
   return base + (uint32_t)d;
 }
 
-// Refresh a "Slept d/t h" line from health, and hide it outright when there is
-// no reading. Shared by the ring screen and the pending screen, which show the
-// same figures for the same night -- the only difference is where the line
-// sits, because the pending screen's bottom is already the key legend's.
+// The night's sleep as one line, and when health was last asked for it.
 //
-// `buf` must be static in the caller: a TextLayer keeps the POINTER it is
-// given and re-reads it on every repaint, so a stack buffer would be drawn
-// from long after it died. Each caller owns its own, rather than sharing one,
-// so that the two windows can be alive at the same time (the ring pushes over
-// the pending screen, and pops back to it) without one's repaint reading text
-// the other just rewrote.
-static void update_slept_line(TextLayer *layer, char *buf, int buf_len) {
+// ONE cache and ONE buffer for BOTH screens, deliberately: they report the same
+// night, so the text is identical, and a TextLayer keeps the POINTER it is given
+// -- a file-scope static is the only kind of storage that is safe to hand two
+// layers that may briefly be alive at the same time.
+//
+// The minute guard is not an optimisation detail, it is what keeps this off the
+// hot path: update_ring_text is driven by burst_cb as well as by the minute
+// tick, and the burst gap lerps down to 3 s on the aggressive profile (1 s at
+// the clamp floor), so an unguarded read would hit the health store four times
+// every few seconds for the whole 15-minute ring -- while the motor and the
+// speaker are already at full draw -- to refresh a daily sum that cannot change
+// more than once a minute.
+static char   s_slept_text[24];
+static time_t s_slept_read_at;
+
+// Refresh a "Slept d/t h" line, and hide it outright when there is no reading.
+// Shared by the ring screen and the pending screen -- the only difference is
+// where the line sits, because the pending screen's bottom is already the key
+// legend's.
+static void update_slept_line(TextLayer *layer) {
   if (!layer) {
     return;
   }
-  int deep = 0, total = 0;
-  hr_sleep_totals(&deep, &total);
-  st_format_slept(deep, total, buf, buf_len);
-  text_layer_set_text(layer, buf);
-  layer_set_hidden(text_layer_get_layer(layer), buf[0] == '\0');
+  time_t now = time(NULL);
+  // now < s_slept_read_at is not paranoia: every pebble-tool connection
+  // re-syncs the emulator's clock, and it has been seen to jump backwards by
+  // hours. A backwards jump must re-read, not freeze the cache forever.
+  if (s_slept_read_at == 0 || now < s_slept_read_at
+      || now - s_slept_read_at >= SECONDS_PER_MINUTE) {
+    int deep = 0, total = 0;
+    hr_sleep_totals(&deep, &total);
+    st_format_slept(deep, total, s_slept_text, sizeof(s_slept_text));
+    s_slept_read_at = now;
+  }
+  text_layer_set_text(layer, s_slept_text);
+  layer_set_hidden(text_layer_get_layer(layer), s_slept_text[0] == '\0');
+}
+
+// Forward declaration: this function is driven from update_ring_text, which
+// sits far above snooze_exhausted's one real definition (kept down with the
+// snooze handlers it also guards, where its comment belongs).
+static bool snooze_exhausted(void);
+
+// The three snooze affordances -- the word, the length it grants under it, and
+// the "+" that opens the length menu -- shown or hidden together on the single
+// snooze_exhausted() predicate, with the length re-read from config each time.
+//
+// NOT decided once at window load, which is what the comments here used to
+// claim was safe. Two paths break that claim:
+//
+//   * burst_cb's over_cap branch deliberately leaves the "Alarm missed" ring
+//     window ON THE STACK without ending the cycle, and start_ring's own
+//     window_stack_contains_window guard then RESUMES that window rather than
+//     pushing it again -- so ring_window_load does not re-run. By then
+//     runstate_begin_cycle(fresh) has zeroed snooze_used_min, i.e. the alarm
+//     rings with a full allowance while UP and SELECT are live and nothing on
+//     screen says so. That is the exact inverse of the bug hiding these was
+//     added to fix.
+//   * a phone config save mid-ring (GET_INT(SnoozeMin/SnoozeMax) followed by
+//     reload_and_rearm, which rebuilds no window) moves both halves of the
+//     predicate AND the number -- leaving a label promising "10 min" for a
+//     button that now grants something else.
+//
+// update_ring_text drives this, so it is re-evaluated on every burst and every
+// minute tick. s_ring_plus is included even though its staleness predates this
+// screen's second line: it is the same predicate, and keeping one place that
+// knows it is the whole point (see snooze_exhausted's own comment).
+static void ring_update_snooze_labels(void) {
+  if (!s_ring_up || !s_ring_up_sub || !s_ring_plus) {
+    return;
+  }
+  snprintf(s_ring_up_sub_text, sizeof(s_ring_up_sub_text), "%u min",
+           (unsigned)s_cfg.snooze_min);
+  text_layer_set_text(s_ring_up_sub, s_ring_up_sub_text);
+  bool no_snooze = snooze_exhausted();
+  layer_set_hidden(text_layer_get_layer(s_ring_up), no_snooze);
+  layer_set_hidden(text_layer_get_layer(s_ring_up_sub), no_snooze);
+  layer_set_hidden(text_layer_get_layer(s_ring_plus), no_snooze);
 }
 
 static void update_ring_text(void) {
@@ -1303,11 +1365,12 @@ static void update_ring_text(void) {
   }
   text_layer_set_text(s_ring_sub, sub);
 
-  // Re-read every minute rather than once at window load: the ring can outlive
-  // the health sample that was current when it opened, and on a long ring the
-  // firmware may still be closing out the night's session.
-  static char slept[24];
-  update_slept_line(s_ring_slept, slept, sizeof(slept));
+  // Refreshed here rather than once at window load: the ring can outlive the
+  // health sample that was current when it opened, and on a long ring the
+  // firmware may still be closing out the night's session. update_slept_line
+  // rate-limits the actual health read to once a minute.
+  update_slept_line(s_ring_slept);
+  ring_update_snooze_labels();
 }
 
 static void burst_cb(void *data);
@@ -1776,7 +1839,7 @@ static void ring_window_load(Window *w) {
 
   // A permanent hint that the middle button does something, at the height of
   // the button itself -- the same idea as PebbleCountdownTimer's alarm screen.
-  // Hidden when snoozing is switched off, because then SELECT really is inert.
+  // Hidden while snoozing is impossible, because then SELECT really is inert.
   //
   // The clock gives up PLUS_MARGIN on BOTH sides, not just the right: a clock
   // centred in a box that is short on one side reads as crooked at 42 pt.
@@ -1806,22 +1869,29 @@ static void ring_window_load(Window *w) {
   // long-press), not by the button label -- so "Stop" alone is always enough
   // there regardless of which size is picked.
   //
-  // The UP label is TWO lines -- the word, and the length it grants in a small
-  // font under it -- so it is the whole BLOCK that is centred on the button's
-  // 22 %, not the word alone. The block's height is reserved unconditionally,
-  // even when snoozing is off and both lines are hidden: a clock that changes
-  // size with a phone setting would be a stranger result than the few pixels
-  // this costs the "Stop"-only screen.
-  const int UPSUB_H = 16;          // GOTHIC_14's line box
+  // The UP label is TWO lines now -- the word, and the length it grants in a
+  // small font under it -- and the second line's height comes out of the DEAD
+  // BAND ABOVE the label, never out of the clock/subtitle band below. up_y,
+  // down_y, mid_top and time_h are therefore byte-identical to what they were
+  // when the label was one line: the word moves UP by UPSUB_H and the small
+  // line ends exactly where the single label used to.
+  //
+  // Measured, not assumed. Centring the two-line block on the button's 22 %
+  // instead -- which is what "obviously" reads right -- takes half of UPSUB_H
+  // out of mid_h, costing time_h 4 px and sub_h 4 px on every board, and the
+  // 144 px boards' "Alarm  (muted)" then rendered 1 px shorter: exactly the
+  // parenthesis-curl clipping the sub_h comment below records as having
+  // happened once already. Screenshots at native size do not show a 1 px loss;
+  // this was caught by counting ink rows in the PNG.
+  const int UPSUB_H = 16;
   int btn_h = 34;
   GFont btn_font = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
-  int up_block_h = btn_h + UPSUB_H;
-  int up_y   = b.size.h * 22 / 100 - up_block_h / 2;
+  int up_y   = b.size.h * 22 / 100 - btn_h / 2;
   int down_y = b.size.h * 78 / 100 - btn_h / 2;
   // 2 px gap under UP, 2 px reserved above DOWN (the latter is also what
   // keeps the subtitle's descenders -- e.g. "Alarm (muted)" -- off the exact
   // clip edge of the shared band, previously flush with it on a 144x168 board).
-  int mid_top = up_y + up_block_h + 2;
+  int mid_top = up_y + btn_h + 2;
   int mid_h   = down_y - mid_top - 2;
   // 55/100, not 6/10: at 6/10 sub_h works out to 23 px for a GOTHIC_24_BOLD line
   // box, one row short, so "(muted)" (permanent on aplite/basalt/diorite -- no
@@ -1837,10 +1907,9 @@ static void ring_window_load(Window *w) {
     // re-measure once against the new (larger) time_h.
     btn_h = 28;
     btn_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
-    up_block_h = btn_h + UPSUB_H;
-    up_y   = b.size.h * 22 / 100 - up_block_h / 2;
+    up_y   = b.size.h * 22 / 100 - btn_h / 2;
     down_y = b.size.h * 78 / 100 - btn_h / 2;
-    mid_top = up_y + up_block_h + 2;
+    mid_top = up_y + btn_h + 2;
     mid_h   = down_y - mid_top - 2;
     time_h  = mid_h * 55 / 100;
     time_font = ring_time_font(b.size.w - 2 * PLUS_MARGIN, time_h, &time_sz);
@@ -1850,36 +1919,35 @@ static void ring_window_load(Window *w) {
   // "Snooze" keeps the size it always had -- it is the word a half-asleep user
   // reads at arm's length -- and the length it grants goes on a small line
   // directly under it. Spelling it into the label itself was tried first and
-  // rejected: "Snooze 10 min" only fits by dropping the whole label a size,
-  // which costs the word far more legibility than the number is worth.
+  // rejected from the wrist: "Snooze 10 min" only fits by dropping the whole
+  // label a size, which costs the word far more legibility than the number is
+  // worth.
+  //
+  // The pair grows UPWARD from where the single label sat (see the UPSUB_H note
+  // above), so up_sub_y + UPSUB_H lands on the old label's bottom edge and the
+  // clock band is untouched. The clamp is defensive only: up_y exceeds UPSUB_H
+  // on every board this app targets (the tightest is 168 * 22/100 - 14 = 22).
   const int up_w = b.size.w - 6;
-  s_ring_up = text_layer_create(GRect(0, up_y, up_w, btn_h));
+  int up_word_y = up_y - UPSUB_H;
+  if (up_word_y < 0) { up_word_y = 0; }
+  int up_sub_y = up_word_y + btn_h;
+
+  s_ring_up = text_layer_create(GRect(0, up_word_y, up_w, btn_h));
   text_layer_set_font(s_ring_up, btn_font);
   text_layer_set_text_alignment(s_ring_up, GTextAlignmentRight);
   text_layer_set_text(s_ring_up, "Snooze");
   night_text_layer(s_ring_up);
   layer_add_child(root, text_layer_get_layer(s_ring_up));
 
-  // Static, because a TextLayer keeps the pointer it is given.
-  static char up_sub_text[12];     // "60 min" + slack
-  snprintf(up_sub_text, sizeof(up_sub_text), "%u min", (unsigned)s_cfg.snooze_min);
-  s_ring_up_sub = text_layer_create(GRect(0, up_y + btn_h, up_w, UPSUB_H));
+  s_ring_up_sub = text_layer_create(GRect(0, up_sub_y, up_w, UPSUB_H));
   text_layer_set_font(s_ring_up_sub, fonts_get_system_font(FONT_KEY_GOTHIC_14));
   text_layer_set_text_alignment(s_ring_up_sub, GTextAlignmentRight);
-  text_layer_set_text(s_ring_up_sub, up_sub_text);
   night_text_layer(s_ring_up_sub);
   layer_add_child(root, text_layer_get_layer(s_ring_up_sub));
-
-  // BOTH lines hidden on exactly the predicate that already hides the "+" and
-  // makes UP and SELECT inert (snooze_exhausted): snoozing switched off, or
-  // the allowance spent. A label for a button that does nothing is the screen
-  // promising something it will not deliver -- the same reasoning that took
-  // the "+" away, applied to the word it sits next to. Evaluated once here for
-  // the same reason the "+" is (see the note below it): nothing can change the
-  // predicate while this window stays on screen.
-  bool no_snooze = snooze_exhausted();
-  layer_set_hidden(text_layer_get_layer(s_ring_up), no_snooze);
-  layer_set_hidden(text_layer_get_layer(s_ring_up_sub), no_snooze);
+  // Its text, and whether either line is shown at all, are set by
+  // ring_update_snooze_labels via the update_ring_text() call at the end of
+  // this function -- and re-set on every burst and tick thereafter, because
+  // neither can be decided once (see that function).
 
   // "Stop" is constant -- at either label
   // size, "2x = Stop" would not fit as well as "Stop" alone, and which button
@@ -1898,16 +1966,9 @@ static void ring_window_load(Window *w) {
   text_layer_set_text(s_ring_plus, "+");
   night_text_layer(s_ring_plus);
   layer_add_child(root, text_layer_get_layer(s_ring_plus));
-  // Hidden on the same snooze_exhausted() predicate ring_select_multi gates
-  // on, not snooze_min alone -- an allowance already spent by the time this
-  // window is (re)built must hide the "+" too, or it promises a menu that
-  // would open with nothing to offer. Evaluated once here at window-load
-  // time rather than kept live: snooze_count (the other half of the
-  // predicate) only changes inside ring_snooze_for, which always pops this
-  // window before the count can be re-read, and the next ring rebuilds the
-  // window from scratch -- so there is no path where the predicate's value
-  // changes while this window stays on screen.
-  layer_set_hidden(text_layer_get_layer(s_ring_plus), snooze_exhausted());
+  // Shown/hidden by ring_update_snooze_labels, together with the two label
+  // lines it belongs with -- see there for why this cannot be decided once at
+  // window load, which is what the note that used to sit here claimed.
 
   // Time + subtitle share the band left between the two button labels, split
   // proportionally (60/40) -- verified by screenshot on both boards rather
@@ -1938,12 +1999,13 @@ static void ring_window_load(Window *w) {
   layer_add_child(root, text_layer_get_layer(s_ring_hint));
   layer_set_hidden(text_layer_get_layer(s_ring_hint), true);
 
-  // The night's sleep, in the band left over UNDER the "Stop" label -- 20 px
-  // on a 144x168 board, 34 on emery, and unused by anything else, so this
-  // costs the clock and the labels nothing. GOTHIC_14's line box is 18 px.
-  // Created only when that band really is that big: on a board where the
-  // buttons reach the bottom edge, no line is far better than one drawn over
-  // "Stop".
+  // The night's sleep, in the band left over UNDER the "Stop" label -- 23 px on
+  // a 144x168 board (after the shrink branch), 34 on emery, and unused by
+  // anything else, so this costs the clock and the labels nothing. 18 px is
+  // comfortably over the 12 px of ink GOTHIC_14 actually puts on screen for
+  // this string. Created only when that band really is that big: on a board
+  // where the buttons reach the bottom edge, no line is far better than one
+  // drawn over "Stop".
   const int SLEPT_H = 18;
   int slept_y = b.size.h - SLEPT_H - 1;
   if (slept_y >= down_y + btn_h) {
@@ -2227,8 +2289,7 @@ static void wait_window_update(void) {
   }
   text_layer_set_text(s_wait_sub, sub);
 
-  static char slept[24];
-  update_slept_line(s_wait_slept, slept, sizeof(slept));
+  update_slept_line(s_wait_slept);
 }
 
 // The two-line legend at the foot of the waiting screen. It is drawn ALWAYS, not
