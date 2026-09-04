@@ -1176,6 +1176,11 @@ static Window    *s_ring_window;
 static TextLayer *s_ring_time;
 static TextLayer *s_ring_sub;
 static TextLayer *s_ring_up;
+// The snooze length, small, directly under the "Snooze" label. A separate
+// layer because it is a separate font: one TextLayer draws one size, and the
+// word has to stay big enough to read at arm's length while the number does
+// not.
+static TextLayer *s_ring_up_sub;
 static TextLayer *s_ring_down;
 static TextLayer *s_ring_hint;
 static TextLayer *s_ring_plus;
@@ -1764,36 +1769,6 @@ static GFont ring_time_font(int box_w, int time_h, GSize *out) {
   return chosen;
 }
 
-// The UP label now carries the length the button actually grants ("Snooze 9
-// min"), which is wider than the bare word and does not fit a 144 px board at
-// the size the layout budgeted. Step DOWN from that budget until it fits --
-// never up, because the box's height was chosen for the budgeted size.
-//
-// If not even the smallest step fits, the caller falls back to the bare word:
-// the number is a convenience, but the label is the contract, and a clipped
-// "Snooze 6" that reads as a six-minute snooze would be worse than no number
-// at all.
-#define RING_LABEL_STEPS 3
-static GFont ring_label_font(const char *text, int box_w, int start_idx,
-                             bool *out_fits) {
-  static const char *const keys[RING_LABEL_STEPS] = {
-    FONT_KEY_GOTHIC_28_BOLD,
-    FONT_KEY_GOTHIC_24_BOLD,
-    FONT_KEY_GOTHIC_18_BOLD,
-  };
-  const GRect probe = GRect(0, 0, box_w, 200);
-  GFont chosen = fonts_get_system_font(keys[start_idx]);
-  *out_fits = false;
-  for (int i = start_idx; i < RING_LABEL_STEPS; i++) {
-    GFont f = fonts_get_system_font(keys[i]);
-    chosen = f;
-    GSize sz = graphics_text_layout_get_content_size(
-        text, f, probe, GTextOverflowModeFill, GTextAlignmentRight);
-    if (sz.w <= box_w) { *out_fits = true; break; }
-  }
-  return chosen;
-}
-
 static void ring_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
@@ -1830,15 +1805,23 @@ static void ring_window_load(Window *w) {
   // taught by the hint on the first press (or the progress bar for
   // long-press), not by the button label -- so "Stop" alone is always enough
   // there regardless of which size is picked.
+  //
+  // The UP label is TWO lines -- the word, and the length it grants in a small
+  // font under it -- so it is the whole BLOCK that is centred on the button's
+  // 22 %, not the word alone. The block's height is reserved unconditionally,
+  // even when snoozing is off and both lines are hidden: a clock that changes
+  // size with a phone setting would be a stranger result than the few pixels
+  // this costs the "Stop"-only screen.
+  const int UPSUB_H = 16;          // GOTHIC_14's line box
   int btn_h = 34;
-  int btn_idx = 0;                 // index into ring_label_font's step table
   GFont btn_font = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
-  int up_y   = b.size.h * 22 / 100 - btn_h / 2;
+  int up_block_h = btn_h + UPSUB_H;
+  int up_y   = b.size.h * 22 / 100 - up_block_h / 2;
   int down_y = b.size.h * 78 / 100 - btn_h / 2;
   // 2 px gap under UP, 2 px reserved above DOWN (the latter is also what
   // keeps the subtitle's descenders -- e.g. "Alarm (muted)" -- off the exact
   // clip edge of the shared band, previously flush with it on a 144x168 board).
-  int mid_top = up_y + btn_h + 2;
+  int mid_top = up_y + up_block_h + 2;
   int mid_h   = down_y - mid_top - 2;
   // 55/100, not 6/10: at 6/10 sub_h works out to 23 px for a GOTHIC_24_BOLD line
   // box, one row short, so "(muted)" (permanent on aplite/basalt/diorite -- no
@@ -1853,45 +1836,50 @@ static void ring_window_load(Window *w) {
     // normal label height -- shrink the labels to buy the clock more room and
     // re-measure once against the new (larger) time_h.
     btn_h = 28;
-    btn_idx = 1;
     btn_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
-    up_y   = b.size.h * 22 / 100 - btn_h / 2;
+    up_block_h = btn_h + UPSUB_H;
+    up_y   = b.size.h * 22 / 100 - up_block_h / 2;
     down_y = b.size.h * 78 / 100 - btn_h / 2;
-    mid_top = up_y + btn_h + 2;
+    mid_top = up_y + up_block_h + 2;
     mid_h   = down_y - mid_top - 2;
     time_h  = mid_h * 55 / 100;
     time_font = ring_time_font(b.size.w - 2 * PLUS_MARGIN, time_h, &time_sz);
   }
   int sub_h = mid_h - time_h;
 
-  // The label says how long the snooze is, so the one screen a half-asleep
-  // user is looking at answers "how long do I get?" without a trip to the
-  // phone's config page. Static, because a TextLayer keeps the pointer.
-  static char up_text[20];         // "Snooze 60 min" + slack
-  snprintf(up_text, sizeof(up_text), "Snooze %u min", (unsigned)s_cfg.snooze_min);
+  // "Snooze" keeps the size it always had -- it is the word a half-asleep user
+  // reads at arm's length -- and the length it grants goes on a small line
+  // directly under it. Spelling it into the label itself was tried first and
+  // rejected: "Snooze 10 min" only fits by dropping the whole label a size,
+  // which costs the word far more legibility than the number is worth.
   const int up_w = b.size.w - 6;
-  bool up_fits = false;
-  GFont up_font = ring_label_font(up_text, up_w, btn_idx, &up_fits);
-  if (!up_fits) {
-    // Not even GOTHIC_18_BOLD fits -- keep the contract, drop the number.
-    snprintf(up_text, sizeof(up_text), "Snooze");
-    up_font = btn_font;
-  }
-
   s_ring_up = text_layer_create(GRect(0, up_y, up_w, btn_h));
-  text_layer_set_font(s_ring_up, up_font);
+  text_layer_set_font(s_ring_up, btn_font);
   text_layer_set_text_alignment(s_ring_up, GTextAlignmentRight);
-  text_layer_set_text(s_ring_up, up_text);
+  text_layer_set_text(s_ring_up, "Snooze");
   night_text_layer(s_ring_up);
   layer_add_child(root, text_layer_get_layer(s_ring_up));
-  // Hidden on exactly the predicate that already hides the "+" and makes both
-  // UP and SELECT inert (snooze_exhausted): snoozing switched off, or the
-  // allowance spent. A label for a button that does nothing is the screen
+
+  // Static, because a TextLayer keeps the pointer it is given.
+  static char up_sub_text[12];     // "60 min" + slack
+  snprintf(up_sub_text, sizeof(up_sub_text), "%u min", (unsigned)s_cfg.snooze_min);
+  s_ring_up_sub = text_layer_create(GRect(0, up_y + btn_h, up_w, UPSUB_H));
+  text_layer_set_font(s_ring_up_sub, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  text_layer_set_text_alignment(s_ring_up_sub, GTextAlignmentRight);
+  text_layer_set_text(s_ring_up_sub, up_sub_text);
+  night_text_layer(s_ring_up_sub);
+  layer_add_child(root, text_layer_get_layer(s_ring_up_sub));
+
+  // BOTH lines hidden on exactly the predicate that already hides the "+" and
+  // makes UP and SELECT inert (snooze_exhausted): snoozing switched off, or
+  // the allowance spent. A label for a button that does nothing is the screen
   // promising something it will not deliver -- the same reasoning that took
   // the "+" away, applied to the word it sits next to. Evaluated once here for
   // the same reason the "+" is (see the note below it): nothing can change the
   // predicate while this window stays on screen.
-  layer_set_hidden(text_layer_get_layer(s_ring_up), snooze_exhausted());
+  bool no_snooze = snooze_exhausted();
+  layer_set_hidden(text_layer_get_layer(s_ring_up), no_snooze);
+  layer_set_hidden(text_layer_get_layer(s_ring_up_sub), no_snooze);
 
   // "Stop" is constant -- at either label
   // size, "2x = Stop" would not fit as well as "Stop" alone, and which button
@@ -1975,6 +1963,7 @@ static void ring_window_unload(Window *w) {
   if (s_ring_slept) { text_layer_destroy(s_ring_slept); s_ring_slept = NULL; }
   text_layer_destroy(s_ring_hint);    s_ring_hint = NULL;
   text_layer_destroy(s_ring_down);    s_ring_down = NULL;
+  text_layer_destroy(s_ring_up_sub);  s_ring_up_sub = NULL;
   text_layer_destroy(s_ring_up);      s_ring_up = NULL;
   text_layer_destroy(s_ring_sub);     s_ring_sub = NULL;
   text_layer_destroy(s_ring_time);    s_ring_time = NULL;

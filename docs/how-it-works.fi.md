@@ -181,9 +181,9 @@ rivi puuttuu kokonaan eikä näytä nollia.
 
 ### Pysäyttäminen ja torkku
 
-Soittoruudulla **kaikki napit vaativat kaksi painallusta**: ylänappi (jonka teksti
-kertoo antamansa pituuden, esim. *Snooze 10 min*) torkuttaa kahdesti painettuna,
-alanappi (*Stop*) pysäyttää kahdesti painettuna. Yksi
+Soittoruudulla **kaikki napit vaativat kaksi painallusta**: ylänappi (*Snooze*,
+jonka alla pieni rivi kertoo antamansa pituuden — `10 min`) torkuttaa kahdesti
+painettuna, alanappi (*Stop*) pysäyttää kahdesti painettuna. Yksi
 painallus ei koskaan tee kumpaakaan — se vain näyttää, mitä toinen painallus tekisi
 (`Press 2x to snooze` / `Press 2x to stop`) — koska puoliunessa oleva käsi löytää
 yhden napin tunnustelemalla, ja juuri niin herätys ennen saattoi tulla vahingossa
@@ -215,8 +215,8 @@ Näin valittu pituus on kertaluonteinen: ylänappi tarkoittaa edelleen sitä, mi
 asetit puhelimella.
 
 Kun torkut loppuvat — tai torkku on kytketty puhelimelta kokonaan pois — sekä ylä-
-että keskinappi muuttuvat tehottomiksi, ja näyttö kertoo sen: `Snooze`-teksti ja `+`
-katoavat molemmat, ja näytölle jää pelkkä `Stop`. Kaksi syytä. Nappia joka ei voi
+että keskinappi muuttuvat tehottomiksi, ja näyttö kertoo sen: `Snooze`-teksti,
+sen alla oleva pituusrivi ja `+` katoavat kaikki, ja näytölle jää pelkkä `Stop`. Kaksi syytä. Nappia joka ei voi
 tehdä mitään ei saa mainostaa sellaisena kuin se voisi; eikä ylänappi saa hiljaa
 muuttua toiseksi pysäytykseksi, koska silloin kaksoispainallus, jolla halusi vain
 muutaman minuutin lisää, sammuttaisikin koko herätyksen.
