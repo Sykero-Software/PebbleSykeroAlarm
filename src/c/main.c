@@ -9,6 +9,7 @@
 #include "night_text.h"
 #include "scheduler.h"
 #include "sleep_eval.h"
+#include "sleep_text.h"
 
 static Alarm    s_alarms[MAX_ALARMS];
 static int      s_count;
@@ -1178,6 +1179,10 @@ static TextLayer *s_ring_up;
 static TextLayer *s_ring_down;
 static TextLayer *s_ring_hint;
 static TextLayer *s_ring_plus;
+// The night's sleep, at the very bottom. NULL on a board with no room for it
+// (see ring_window_load) as well as before the window is built, so every
+// touch of it is guarded.
+static TextLayer *s_ring_slept;
 // Held so burst_cb's over-cap path can close a menu the user left open when the
 // alarm gave up; NULL whenever no menu is on screen.
 static ActionMenu *s_snooze_menu;
@@ -1244,6 +1249,28 @@ static uint32_t ring_elapsed_s(void) {
   return base + (uint32_t)d;
 }
 
+// Refresh a "Slept d/t h" line from health, and hide it outright when there is
+// no reading. Shared by the ring screen and the pending screen, which show the
+// same figures for the same night -- the only difference is where the line
+// sits, because the pending screen's bottom is already the key legend's.
+//
+// `buf` must be static in the caller: a TextLayer keeps the POINTER it is
+// given and re-reads it on every repaint, so a stack buffer would be drawn
+// from long after it died. Each caller owns its own, rather than sharing one,
+// so that the two windows can be alive at the same time (the ring pushes over
+// the pending screen, and pops back to it) without one's repaint reading text
+// the other just rewrote.
+static void update_slept_line(TextLayer *layer, char *buf, int buf_len) {
+  if (!layer) {
+    return;
+  }
+  int deep = 0, total = 0;
+  hr_sleep_totals(&deep, &total);
+  st_format_slept(deep, total, buf, buf_len);
+  text_layer_set_text(layer, buf);
+  layer_set_hidden(text_layer_get_layer(layer), buf[0] == '\0');
+}
+
 static void update_ring_text(void) {
   // Guarded: unreachable today (every path that pops the ring window goes
   // through stop_ring_output first, which stops the burst/tick timers that
@@ -1270,6 +1297,12 @@ static void update_ring_text(void) {
     snprintf(sub, sizeof(sub), "Alarm%s", mute);
   }
   text_layer_set_text(s_ring_sub, sub);
+
+  // Re-read every minute rather than once at window load: the ring can outlive
+  // the health sample that was current when it opened, and on a long ring the
+  // firmware may still be closing out the night's session.
+  static char slept[24];
+  update_slept_line(s_ring_slept, slept, sizeof(slept));
 }
 
 static void burst_cb(void *data);
@@ -1731,6 +1764,36 @@ static GFont ring_time_font(int box_w, int time_h, GSize *out) {
   return chosen;
 }
 
+// The UP label now carries the length the button actually grants ("Snooze 9
+// min"), which is wider than the bare word and does not fit a 144 px board at
+// the size the layout budgeted. Step DOWN from that budget until it fits --
+// never up, because the box's height was chosen for the budgeted size.
+//
+// If not even the smallest step fits, the caller falls back to the bare word:
+// the number is a convenience, but the label is the contract, and a clipped
+// "Snooze 6" that reads as a six-minute snooze would be worse than no number
+// at all.
+#define RING_LABEL_STEPS 3
+static GFont ring_label_font(const char *text, int box_w, int start_idx,
+                             bool *out_fits) {
+  static const char *const keys[RING_LABEL_STEPS] = {
+    FONT_KEY_GOTHIC_28_BOLD,
+    FONT_KEY_GOTHIC_24_BOLD,
+    FONT_KEY_GOTHIC_18_BOLD,
+  };
+  const GRect probe = GRect(0, 0, box_w, 200);
+  GFont chosen = fonts_get_system_font(keys[start_idx]);
+  *out_fits = false;
+  for (int i = start_idx; i < RING_LABEL_STEPS; i++) {
+    GFont f = fonts_get_system_font(keys[i]);
+    chosen = f;
+    GSize sz = graphics_text_layout_get_content_size(
+        text, f, probe, GTextOverflowModeFill, GTextAlignmentRight);
+    if (sz.w <= box_w) { *out_fits = true; break; }
+  }
+  return chosen;
+}
+
 static void ring_window_load(Window *w) {
   Layer *root = window_get_root_layer(w);
   GRect b = layer_get_bounds(root);
@@ -1768,6 +1831,7 @@ static void ring_window_load(Window *w) {
   // long-press), not by the button label -- so "Stop" alone is always enough
   // there regardless of which size is picked.
   int btn_h = 34;
+  int btn_idx = 0;                 // index into ring_label_font's step table
   GFont btn_font = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
   int up_y   = b.size.h * 22 / 100 - btn_h / 2;
   int down_y = b.size.h * 78 / 100 - btn_h / 2;
@@ -1789,6 +1853,7 @@ static void ring_window_load(Window *w) {
     // normal label height -- shrink the labels to buy the clock more room and
     // re-measure once against the new (larger) time_h.
     btn_h = 28;
+    btn_idx = 1;
     btn_font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
     up_y   = b.size.h * 22 / 100 - btn_h / 2;
     down_y = b.size.h * 78 / 100 - btn_h / 2;
@@ -1799,12 +1864,34 @@ static void ring_window_load(Window *w) {
   }
   int sub_h = mid_h - time_h;
 
-  s_ring_up = text_layer_create(GRect(0, up_y, b.size.w - 6, btn_h));
-  text_layer_set_font(s_ring_up, btn_font);
+  // The label says how long the snooze is, so the one screen a half-asleep
+  // user is looking at answers "how long do I get?" without a trip to the
+  // phone's config page. Static, because a TextLayer keeps the pointer.
+  static char up_text[20];         // "Snooze 60 min" + slack
+  snprintf(up_text, sizeof(up_text), "Snooze %u min", (unsigned)s_cfg.snooze_min);
+  const int up_w = b.size.w - 6;
+  bool up_fits = false;
+  GFont up_font = ring_label_font(up_text, up_w, btn_idx, &up_fits);
+  if (!up_fits) {
+    // Not even GOTHIC_18_BOLD fits -- keep the contract, drop the number.
+    snprintf(up_text, sizeof(up_text), "Snooze");
+    up_font = btn_font;
+  }
+
+  s_ring_up = text_layer_create(GRect(0, up_y, up_w, btn_h));
+  text_layer_set_font(s_ring_up, up_font);
   text_layer_set_text_alignment(s_ring_up, GTextAlignmentRight);
-  text_layer_set_text(s_ring_up, "Snooze");
+  text_layer_set_text(s_ring_up, up_text);
   night_text_layer(s_ring_up);
   layer_add_child(root, text_layer_get_layer(s_ring_up));
+  // Hidden on exactly the predicate that already hides the "+" and makes both
+  // UP and SELECT inert (snooze_exhausted): snoozing switched off, or the
+  // allowance spent. A label for a button that does nothing is the screen
+  // promising something it will not deliver -- the same reasoning that took
+  // the "+" away, applied to the word it sits next to. Evaluated once here for
+  // the same reason the "+" is (see the note below it): nothing can change the
+  // predicate while this window stays on screen.
+  layer_set_hidden(text_layer_get_layer(s_ring_up), snooze_exhausted());
 
   // "Stop" is constant -- at either label
   // size, "2x = Stop" would not fit as well as "Stop" alone, and which button
@@ -1863,10 +1950,29 @@ static void ring_window_load(Window *w) {
   layer_add_child(root, text_layer_get_layer(s_ring_hint));
   layer_set_hidden(text_layer_get_layer(s_ring_hint), true);
 
+  // The night's sleep, in the band left over UNDER the "Stop" label -- 20 px
+  // on a 144x168 board, 34 on emery, and unused by anything else, so this
+  // costs the clock and the labels nothing. GOTHIC_14's line box is 18 px.
+  // Created only when that band really is that big: on a board where the
+  // buttons reach the bottom edge, no line is far better than one drawn over
+  // "Stop".
+  const int SLEPT_H = 18;
+  int slept_y = b.size.h - SLEPT_H - 1;
+  if (slept_y >= down_y + btn_h) {
+    s_ring_slept = text_layer_create(GRect(0, slept_y, b.size.w, SLEPT_H));
+    text_layer_set_font(s_ring_slept, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+    text_layer_set_text_alignment(s_ring_slept, GTextAlignmentCenter);
+    night_text_layer(s_ring_slept);
+    layer_add_child(root, text_layer_get_layer(s_ring_slept));
+  }
+
   update_ring_text();
 }
 
 static void ring_window_unload(Window *w) {
+  // Guarded: unlike the others, this layer is conditional -- a board with no
+  // room under the "Stop" label never creates it.
+  if (s_ring_slept) { text_layer_destroy(s_ring_slept); s_ring_slept = NULL; }
   text_layer_destroy(s_ring_hint);    s_ring_hint = NULL;
   text_layer_destroy(s_ring_down);    s_ring_down = NULL;
   text_layer_destroy(s_ring_up);      s_ring_up = NULL;
@@ -2036,6 +2142,10 @@ static void prv_drop_prealarm_record(void) {
 }
 
 static TextLayer *s_wait_keys;        // the two-line "how to get out" legend
+// The night's sleep, at the TOP here rather than at the bottom as on the ring
+// screen: this window's bottom belongs to the key legend. NULL on a board with
+// no room above the clock.
+static TextLayer *s_wait_slept;
 static AppTimer  *s_wait_hint_timer;
 static TextLayer *s_wait_time;
 static TextLayer *s_wait_sub;
@@ -2127,6 +2237,9 @@ static void wait_window_update(void) {
              dtm->tm_hour, dtm->tm_min);
   }
   text_layer_set_text(s_wait_sub, sub);
+
+  static char slept[24];
+  update_slept_line(s_wait_slept, slept, sizeof(slept));
 }
 
 // The two-line legend at the foot of the waiting screen. It is drawn ALWAYS, not
@@ -2140,7 +2253,20 @@ static void wait_window_load(Window *w) {
   GRect b = layer_get_bounds(root);
   window_set_background_color(w, NIGHT_BG);
 
-  s_wait_time = text_layer_create(GRect(0, b.size.h / 2 - 52, b.size.w, 44));
+  // The same "Slept d/t h" line the ring screen carries, in the band ABOVE the
+  // clock (32 px free on a 144x168 board, 62 on emery) -- this window's bottom
+  // is already the key legend's. Created only where that band really exists.
+  const int SLEPT_H = 18;
+  int clock_y = b.size.h / 2 - 52;
+  if (clock_y >= SLEPT_H + 2) {
+    s_wait_slept = text_layer_create(GRect(0, 2, b.size.w, SLEPT_H));
+    text_layer_set_font(s_wait_slept, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+    text_layer_set_text_alignment(s_wait_slept, GTextAlignmentCenter);
+    night_text_layer(s_wait_slept);
+    layer_add_child(root, text_layer_get_layer(s_wait_slept));
+  }
+
+  s_wait_time = text_layer_create(GRect(0, clock_y, b.size.w, 44));
   text_layer_set_font(s_wait_time, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
   text_layer_set_text_alignment(s_wait_time, GTextAlignmentCenter);
   night_text_layer(s_wait_time);
@@ -2172,6 +2298,8 @@ static void wait_window_unload(Window *w) {
   }
   text_layer_destroy(s_wait_keys);
   s_wait_keys = NULL;
+  // Guarded: conditional, unlike the others (see wait_window_load).
+  if (s_wait_slept) { text_layer_destroy(s_wait_slept); s_wait_slept = NULL; }
   text_layer_destroy(s_wait_sub);
   text_layer_destroy(s_wait_time);
   // NULL both out (carried fix from Task 11's review, mirroring

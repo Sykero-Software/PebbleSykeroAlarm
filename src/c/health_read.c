@@ -53,6 +53,39 @@ static time_t prv_session_onset(time_t now) {
   return (time_t)onset;
 }
 
+#ifndef SCREENSHOT_FIXTURES
+// TimeStyle's own accessibility check (src/c/util.c is_health_metric_accessible),
+// deliberately identical: the same today-window, the same mask bit. A metric
+// the watchface would draw must be one this screen draws too.
+static int prv_sum_today(HealthMetric metric) {
+  time_t start = time_start_of_today();
+  time_t end = time(NULL);
+  HealthServiceAccessibilityMask mask =
+      health_service_metric_accessible(metric, start, end);
+  if (!(mask & HealthServiceAccessibilityMaskAvailable)) {
+    return 0;
+  }
+  return (int)health_service_sum_today(metric);
+}
+#endif   // the fixture build below never calls it, and an unused static warns
+
+void hr_sleep_totals(int *deep_s, int *total_s) {
+#ifdef SCREENSHOT_FIXTURES
+  // Appstore screenshots only, and ONLY under the SCREENSHOT_FIXTURES env flag
+  // (see wscript): a headless emulator has recorded no sleep at all, so every
+  // screen carrying this line would be shot with the line hidden. 1.75 h
+  // restful of 6.5 h -- deliberately the same demo night TimeStyle's own sleep
+  // widget fixture uses, so the two products' store pages agree. `pebble
+  // publish` runs its own build with no such env var, so this cannot reach a
+  // released bundle.
+  *deep_s = 6300;
+  *total_s = 23400;
+#else
+  *total_s = prv_sum_today(HealthMetricSleepSeconds);
+  *deep_s = prv_sum_today(HealthMetricSleepRestfulSeconds);
+#endif
+}
+
 HistoryRead hr_read_night(SleepMinute *out, int max, time_t window_start_utc) {
   HistoryRead hr = { .count = 0, .window_start = -1, .is_restful = false,
                      .available = false, .first_utc = 0 };
@@ -157,6 +190,11 @@ HistoryRead hr_read_night(SleepMinute *out, int max, time_t window_start_utc) {
   HistoryRead hr = { .count = 0, .window_start = -1, .is_restful = false,
                      .available = false, .first_utc = 0 };
   return hr;
+}
+
+void hr_sleep_totals(int *deep_s, int *total_s) {
+  *deep_s = 0;
+  *total_s = 0;
 }
 
 #endif

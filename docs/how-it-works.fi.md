@@ -170,10 +170,20 @@ kuin niiden nimet antavat ymmärtää.)
 Kun soitto luovuttaa, se lakkaa pitämästä ääntä mutta jättää näytölle
 **"Alarm missed"**, jotta aamu kertoo mitä tapahtui.
 
+### Mitä soittoruudulla näkyy
+
+Kellon ja kahden nappitekstin alla alarivi kertoo yön, joka tähän johti:
+`Slept 1.7/6.5 h` — syvää unta tunteina kauttaviivalla unta yhteensä, samat kaksi
+lukua jotka kellon oma terveysdata ja TimeStylen unihelmi näyttävät. Torkkuruudulla
+on sama rivi, mutta kellon yläpuolella nappitekstien alan sijaan. Jos kello ei ole
+tallentanut lainkaan unta — terveysseuranta pois päältä, tai yö jota se ei nähnyt —
+rivi puuttuu kokonaan eikä näytä nollia.
+
 ### Pysäyttäminen ja torkku
 
-Soittoruudulla **kaikki napit vaativat kaksi painallusta**: ylänappi (*Snooze*)
-torkuttaa kahdesti painettuna, alanappi (*Stop*) pysäyttää kahdesti painettuna. Yksi
+Soittoruudulla **kaikki napit vaativat kaksi painallusta**: ylänappi (jonka teksti
+kertoo antamansa pituuden, esim. *Snooze 10 min*) torkuttaa kahdesti painettuna,
+alanappi (*Stop*) pysäyttää kahdesti painettuna. Yksi
 painallus ei koskaan tee kumpaakaan — se vain näyttää, mitä toinen painallus tekisi
 (`Press 2x to snooze` / `Press 2x to stop`) — koska puoliunessa oleva käsi löytää
 yhden napin tunnustelemalla, ja juuri niin herätys ennen saattoi tulla vahingossa
@@ -204,12 +214,12 @@ valikon sisällä, johon pääsi vain kaksoispainalluksella, olisi pelkkää ser
 Näin valittu pituus on kertaluonteinen: ylänappi tarkoittaa edelleen sitä, minkä
 asetit puhelimella.
 
-Kun torkut loppuvat, napit käyttäytyvät tarkoituksella eri tavalla. **Ylänappi**
-toimii pysäytyksenä sen sijaan että muuttuisi tehottomaksi — se pyytää "jotain"
-torkkua, ja pysäytys on rehellinen vastaus kun sellaista ei ole. **Keskinappi** sen
-sijaan muuttuu tehottomaksi ja `+` katoaa: se pyytää *tiettyä* pituutta, ja
-vastaaminen "45 minuuttiin" pysäyttämällä herätys näyttäisi siltä, että sovellus
-sivuuttaa juuri valitun luvun.
+Kun torkut loppuvat — tai torkku on kytketty puhelimelta kokonaan pois — sekä ylä-
+että keskinappi muuttuvat tehottomiksi, ja näyttö kertoo sen: `Snooze`-teksti ja `+`
+katoavat molemmat, ja näytölle jää pelkkä `Stop`. Kaksi syytä. Nappia joka ei voi
+tehdä mitään ei saa mainostaa sellaisena kuin se voisi; eikä ylänappi saa hiljaa
+muuttua toiseksi pysäytykseksi, koska silloin kaksoispainallus, jolla halusi vain
+muutaman minuutin lisää, sammuttaisikin koko herätyksen.
 
 ---
 

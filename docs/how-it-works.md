@@ -169,10 +169,20 @@ suggest.)
 When the ring gives up, it stops making noise but leaves **"Alarm missed"** on the
 screen, so the morning tells you what happened.
 
+### What the ringing screen shows
+
+Under the clock and the two button labels, the bottom line reports the night that
+led here: `Slept 1.7/6.5 h` — restful hours of total hours, the same two figures
+the watch's own health data and TimeStyle's sleep widget report. The snooze screen
+carries the same line, above its clock instead of below the buttons. When the watch
+has recorded no sleep at all — health switched off, or a night it never saw — the
+line is absent rather than showing zeros.
+
 ### Stopping and snoozing
 
 On the ringing screen, **both buttons need two presses**: the top button
-(*Snooze*) twice snoozes, the bottom button (*Stop*) twice stops it. One press
+(labelled with the length it grants, e.g. *Snooze 10 min*) twice snoozes, the
+bottom button (*Stop*) twice stops it. One press
 never does either — it only shows what the second press would do (`Press 2x to
 snooze` / `Press 2x to stop`) — because a half-asleep hand finds one button by
 feel, and that is exactly how an alarm used to get dismissed, or snoozed, by
@@ -202,11 +212,12 @@ opening it was the deliberate act, and a confirmation inside a menu you had to
 double-press to reach would be ceremony. A length chosen this way is a one-off: the
 top button still means whatever you configured on the phone.
 
-When the snoozes run out the two buttons deliberately differ. The **top** button
-behaves as Stop rather than going inert — it asks for "a" snooze, and stopping is
-the honest answer when there isn't one. The **middle** button goes inert instead,
-and the `+` disappears: it asks for a *specific* length, and answering "45 min"
-with "alarm stopped" would read as the app ignoring the number you just picked.
+When the snoozes run out — or snoozing is switched off on the phone entirely —
+the top and middle buttons both go inert, and the screen says so: the `Snooze`
+label and the `+` both disappear, leaving `Stop` alone on the screen. Two reasons.
+A button that cannot do anything must not be advertised as if it could; and the
+top button must never quietly become a second Stop, because then a double-press
+meant to buy a few more minutes would switch the whole alarm off instead.
 
 ---
 

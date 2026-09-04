@@ -23,3 +23,13 @@ typedef struct {
 // Returns available=false when health cannot be used at all — activity tracking
 // switched off, or a platform without health.
 HistoryRead hr_read_night(SleepMinute *out, int max, time_t window_start_utc);
+
+// The night's sleep totals in seconds: `total` all sleep, `deep` the restful
+// share of it. Both 0 when health cannot be read (activity tracking off, a
+// platform without health, or simply nothing recorded yet).
+//
+// These are health's own DAILY sums -- health_service_sum_today -- and so
+// exactly the two figures TimeStyle's sleep widget draws, which is the point:
+// the alarm screen must not report a different night from the watchface.
+// Neither pointer may be NULL.
+void hr_sleep_totals(int *deep_s, int *total_s);
