@@ -31,6 +31,7 @@ run_one t_escalation     tests/test_escalation.c     src/c/escalation.c
 run_one t_sleep_eval     tests/test_sleep_eval.c     src/c/sleep_eval.c
 run_one t_sleep_sessions tests/test_sleep_sessions.c src/c/sleep_eval.c
 run_one t_night_text     tests/test_night_text.c     src/c/night_text.c
+run_one t_sleep_text     tests/test_sleep_text.c     src/c/sleep_text.c
 
 # t_pack_contract is different: it takes its packed strings as argv, generated
 # HERE by invoking the REAL compiled packer (src/pkjs/alarm_pack.js, generated
