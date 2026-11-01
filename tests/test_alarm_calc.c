@@ -94,7 +94,7 @@ int main(void) {
     for (int mi = 0; mi < 5; mi++) {
       for (int wi = 0; wi < 4; wi++) {
         Alarm a = { .minute_of_day = minutes[mi], .weekday_mask = masks[wi],
-                    .enabled = true, .skip_next = false };
+                    .enabled = true, .skip_day = 0 };
         for (int day = 0; day < 365; day += 7) {
           time_t from = at(2026, 8, 1, 12, 0) + (time_t)day * 86400;
           time_t next = ac_next_occurrence(&a, from);
@@ -145,14 +145,67 @@ int main(void) {
   Alarm off = { .minute_of_day = 7 * 60, .weekday_mask = 0x7F, .enabled = false };
   assert(ac_next_occurrence(&off, at(2026, 7, 1, 6, 0)) == 0);
 
-  // --- skip_next: returns the occurrence AFTER the next one ---
+  // --- skip_day: the occurrence on that local day is passed over ---
   Alarm skip = { .minute_of_day = 7 * 60, .weekday_mask = 0x1F,
-                 .enabled = true, .skip_next = true };
+                 .enabled = true, .skip_day = ac_local_day(at(2026, 7, 1, 7, 0)) };
   assert(ac_next_occurrence(&skip, at(2026, 7, 1, 6, 0)) == at(2026, 7, 2, 7, 0));
-  // skip on a Friday jumps over Monday to Tuesday
+  // skipping Monday from a Friday jumps over Monday to Tuesday
   Alarm skip_fri = { .minute_of_day = 7 * 60, .weekday_mask = 0x1F,
-                     .enabled = true, .skip_next = true };
+                     .enabled = true, .skip_day = ac_local_day(at(2026, 7, 6, 7, 0)) };
   assert(ac_next_occurrence(&skip_fri, at(2026, 7, 3, 8, 0)) == at(2026, 7, 7, 7, 0));
+
+  // --- THE SKIP MUST NOT OUTLIVE THE OCCURRENCE IT SKIPPED.
+  //
+  // Field bug, 2026-10: the user woke early, skipped that morning's alarm, and
+  // the alarm never rang again. skip_next was a RELATIVE flag ("skip the next
+  // occurrence after now") cleared only by a ring; the skipped occurrence never
+  // rings, so once it had passed every re-arm (the nightly 03:00 one included)
+  // skipped the FOLLOWING morning instead, forever.
+  {
+    Alarm d = { .minute_of_day = 7 * 60, .weekday_mask = 0x7F, .enabled = true,
+                .skip_day = ac_local_day(at(2026, 7, 1, 7, 0)) };   // skip Wed
+    // set at Wed 06:00: Wed is skipped, Thu rings
+    assert(ac_next_occurrence(&d, at(2026, 7, 1, 6, 0)) == at(2026, 7, 2, 7, 0));
+    assert(ac_skip_pending(&d, at(2026, 7, 1, 6, 0)));
+    // Wed evening, the skipped morning is past: Thu STILL rings (was Fri)
+    assert(ac_next_occurrence(&d, at(2026, 7, 1, 22, 0)) == at(2026, 7, 2, 7, 0));
+    assert(!ac_skip_pending(&d, at(2026, 7, 1, 22, 0)));
+    // the nightly 03:00 re-arm on Thu: Thu 07:00 (was Fri)
+    assert(ac_next_occurrence(&d, at(2026, 7, 2, 3, 0)) == at(2026, 7, 2, 7, 0));
+    // and on from there, every day
+    assert(ac_next_occurrence(&d, at(2026, 7, 2, 22, 0)) == at(2026, 7, 3, 7, 0));
+    // through the scheduler's own picker too
+    time_t w = 0;
+    assert(ac_next_alarm_unserved(&d, 1, at(2026, 7, 2, 3, 0), -1, 0, 0, &w) == 0);
+    assert(w == at(2026, 7, 2, 7, 0));
+  }
+
+  // --- ac_expire_skips: past (beyond the one-day look-back margin) and absurd
+  // far-future days are cleared; a pending or just-past skip is kept.
+  {
+    const time_t now = at(2026, 7, 2, 12, 0);            // Thu noon
+    const uint16_t today = ac_local_day(now);
+    Alarm e[5] = {
+      { .minute_of_day = 420, .weekday_mask = 0x7F, .enabled = true, .skip_day = today + 1 },
+      { .minute_of_day = 420, .weekday_mask = 0x7F, .enabled = true, .skip_day = today - 1 },
+      { .minute_of_day = 420, .weekday_mask = 0x7F, .enabled = true, .skip_day = today - 2 },
+      { .minute_of_day = 420, .weekday_mask = 0x7F, .enabled = true, .skip_day = 1 },      // legacy bool true
+      { .minute_of_day = 420, .weekday_mask = 0x7F, .enabled = true, .skip_day = 0xFF01 }, // legacy + garbage pad
+    };
+    assert(ac_expire_skips(e, 5, now));
+    assert(e[0].skip_day == today + 1);
+    assert(e[1].skip_day == today - 1);
+    assert(e[2].skip_day == 0 && e[3].skip_day == 0 && e[4].skip_day == 0);
+    assert(!ac_expire_skips(e, 5, now));                 // idempotent
+    assert(!ac_expire_skips(NULL, 5, now));
+  }
+
+  // --- ac_local_day: calendar arithmetic, local midnight-to-midnight ---
+  assert(ac_local_day(at(1970, 1, 2, 12, 0)) == 1);
+  assert(ac_local_day(at(2026, 7, 1, 0, 0)) == ac_local_day(at(2026, 7, 1, 23, 59)));
+  assert(ac_local_day(at(2026, 7, 2, 0, 0)) == ac_local_day(at(2026, 7, 1, 23, 59)) + 1);
+  assert(ac_local_day(at(2027, 1, 1, 6, 0)) == ac_local_day(at(2026, 12, 31, 6, 0)) + 1);
+  assert(ac_local_day(at(2028, 3, 1, 6, 0)) == ac_local_day(at(2028, 2, 28, 6, 0)) + 2);
 
   // --- ac_next_alarm picks the soonest enabled alarm ---
   Alarm set[3] = {
@@ -193,11 +246,11 @@ int main(void) {
 
   // --- A CONFIG RESEND THAT CHANGES NOTHING MUST NOT CHANGE ANYTHING.
   //
-  // The whole-branch re-review's Critical. `enabled` and `skip_next` are
+  // The whole-branch re-review's Critical. `enabled` and `skip_day` are
   // watch-mutable by design (SELECT toggles an alarm on/off, long SELECT skips its
   // next occurrence, ring_stop_now disables a fired one-time alarm) and are never
   // sent back to the phone, but ac_parse_set rebuilds every slot from `{0}` --
-  // `enabled` from the phone's '-' bit, `skip_next` always false. That was
+  // `enabled` from the phone's '-' bit, `skip_day` always 0. That was
   // harmless while the phone's dict only arrived on an explicit Save; once the
   // watch asks for its config on every launch it is not, because dst_check (on by
   // default) launches the app around 03:00 EVERY NIGHT: disable tomorrow's alarm
@@ -217,13 +270,13 @@ int main(void) {
     // the user now acts ON THE WATCH: slot 0 switched off, slot 1's next
     // occurrence skipped
     a[0].enabled = false;
-    a[1].skip_next = true;
+    a[1].skip_day = 20000;
 
     // ... and the phone resends the very same string (every launch, ~03:00 nightly)
     assert(!ac_apply_set_if_changed(set, set, a, &cnt, MAX_ALARMS));
     assert(cnt == 2);
     assert(a[0].enabled == false);      // still off -- the alarm must NOT ring
-    assert(a[1].skip_next == true);     // still skipped
+    assert(a[1].skip_day == 20000);     // still skipped
     assert(a[0].minute_of_day == 7 * 60);
     assert(a[1].minute_of_day == 8 * 60 + 30);
     // byte-identical, not merely equivalent: a separately-built copy of the same
@@ -231,7 +284,7 @@ int main(void) {
     char same[64];
     snprintf(same, sizeof(same), "%s", set);
     assert(!ac_apply_set_if_changed(same, set, a, &cnt, MAX_ALARMS));
-    assert(a[0].enabled == false && a[1].skip_next == true);
+    assert(a[0].enabled == false && a[1].skip_day == 20000);
 
     // A GENUINE phone-side change still takes full precedence -- including a
     // phone-side DISABLE, which is exactly why this compares the string instead of
@@ -242,7 +295,7 @@ int main(void) {
     assert(cnt == 2);
     assert(a[0].enabled == false);      // the phone's disable
     assert(a[1].enabled == true);
-    assert(a[1].skip_next == false);    // reset by a real change, as designed
+    assert(a[1].skip_day == 0);         // reset by a real change, as designed
 
     // ... and a phone-side ENABLE overrides a watch-side disable, same way
     a[0].enabled = false;
@@ -462,37 +515,42 @@ int main(void) {
   {
     AcAction act[AC_MAX_ACTIONS];
     Alarm rep = { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x7F,
-                  .enabled = true, .skip_next = false };
+                  .enabled = true, .skip_day = 0 };
+    const time_t rnow = at(2026, 7, 1, 6, 0);
 
     // On, not skipping: skip the next one, or turn it off.
-    assert(ac_row_actions(&rep, act, AC_MAX_ACTIONS) == 2);
+    assert(ac_row_actions(&rep, rnow, act, AC_MAX_ACTIONS) == 2);
     assert(act[0] == AC_ACTION_SKIP_NEXT && act[1] == AC_ACTION_TURN_OFF);
 
     // On, already skipping: the first row UNDOES the skip. Offering "skip" again
     // would be a no-op the user could not tell from a broken button.
-    rep.skip_next = true;
-    assert(ac_row_actions(&rep, act, AC_MAX_ACTIONS) == 2);
+    rep.skip_day = ac_local_day(rnow);   // today's 07:50, still ahead at 06:00
+    assert(ac_row_actions(&rep, rnow, act, AC_MAX_ACTIONS) == 2);
     assert(act[0] == AC_ACTION_RING_NEXT && act[1] == AC_ACTION_TURN_OFF);
+    // ... and once that occurrence has passed, the skip is spent: the row offers
+    // a fresh skip again rather than an undo of nothing.
+    assert(ac_row_actions(&rep, at(2026, 7, 1, 9, 0), act, AC_MAX_ACTIONS) == 2);
+    assert(act[0] == AC_ACTION_SKIP_NEXT);
 
     // Off: one row, and NOT a skip -- a disabled alarm has nothing to skip.
     rep.enabled = false;
-    assert(ac_row_actions(&rep, act, AC_MAX_ACTIONS) == 1);
+    assert(ac_row_actions(&rep, rnow, act, AC_MAX_ACTIONS) == 1);
     assert(act[0] == AC_ACTION_TURN_ON);
 
-    // A ONE-TIME alarm gets no skip row at all. skip_next on a mask-0 alarm makes
-    // prv_nth_occurrence return the SECOND occurrence of that time of day, i.e. it
+    // A ONE-TIME alarm gets no skip row at all. Skipping a mask-0 alarm's next
+    // occurrence leaves the SECOND occurrence of that time of day, i.e. it
     // silently moves the alarm to tomorrow -- which is not what "skip the next
     // one" means for an alarm that only has one. Turning it off is the honest
     // action, and it is what the user wanted anyway.
     Alarm once = { .minute_of_day = 6 * 60, .weekday_mask = 0, .enabled = true,
-                   .skip_next = false };
-    assert(ac_row_actions(&once, act, AC_MAX_ACTIONS) == 1);
+                   .skip_day = 0 };
+    assert(ac_row_actions(&once, rnow, act, AC_MAX_ACTIONS) == 1);
     assert(act[0] == AC_ACTION_TURN_OFF);
 
     // Defensive: no room, or no alarm, writes nothing and claims nothing.
-    assert(ac_row_actions(&rep, act, 0) == 0);
-    assert(ac_row_actions(NULL, act, AC_MAX_ACTIONS) == 0);
-    assert(ac_row_actions(&rep, NULL, AC_MAX_ACTIONS) == 0);
+    assert(ac_row_actions(&rep, rnow, act, 0) == 0);
+    assert(ac_row_actions(NULL, rnow, act, AC_MAX_ACTIONS) == 0);
+    assert(ac_row_actions(&rep, rnow, NULL, AC_MAX_ACTIONS) == 0);
   }
 
   // --- ac_snooze_pending: ring_started_at holds the snooze EXPIRY in flight ---
@@ -824,7 +882,7 @@ int main(void) {
                               full_dev_s, 0) < now_mid_window);
 
       // THE RESTART BASIS IS THE ALARM AS IT ACTUALLY IS, not the forced probe.
-      // The staleness probe forces enabled/skip_next so it can ask about the
+      // The staleness probe forces enabled/skip_day so it can ask about the
       // alarm's GRID (deliberate: a cycle for an alarm switched off mid-window
       // keeps its previous behaviour). Its occurrence must never become the basis
       // for OPENING a window, because deleting an alarm on the phone leaves a
@@ -958,7 +1016,7 @@ int main(void) {
 
     // 4b. THE DELIBERATELY DIFFERENT CASE, asserted so it cannot be "simplified"
     //     into 4: the SAME alarm merely SWITCHED OFF mid-window. The staleness
-    //     probe forces enabled/skip_next precisely so this asks about the alarm's
+    //     probe forces enabled/skip_day precisely so this asks about the alarm's
     //     GRID, not its on/off state -- the occurrence still resolves to 07:50 and
     //     the stored deadline still fits, so the cycle stays live and the window
     //     continues. That an alarm switched off mid-window still rings is a
@@ -1320,7 +1378,7 @@ int main(void) {
   // app and the user mean the same alarm.
   {
     Alarm daily = { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x7f,
-                    .enabled = true, .skip_next = false };
+                    .enabled = true, .skip_day = 0 };
     time_t from = at(2026, 8, 6, 8, 7) - 25 * 3600;
 
     // The regression: 17 minutes after the alarm, the answer is TODAY's.
@@ -1346,7 +1404,7 @@ int main(void) {
 
     // Nothing in the searched span: a Monday-only alarm read on a Thursday.
     Alarm mondays = { .minute_of_day = 7 * 60 + 50, .weekday_mask = 0x01,
-                      .enabled = true, .skip_next = false };
+                      .enabled = true, .skip_day = 0 };
     assert(ac_last_past_occurrence(&mondays, at(2026, 8, 6, 8, 7), from) == 0);
 
     // A disabled alarm has no occurrences at all -- both dump sites probe with a

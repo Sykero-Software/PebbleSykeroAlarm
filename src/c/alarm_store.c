@@ -2,6 +2,7 @@
 #include "alarm_store.h"
 #include <pebble.h>
 #include <string.h>
+#include <stddef.h>
 
 // PK_ALARMS is the one persisted blob with no version byte: it is a bare array
 // of Alarm, and the only validation as_load_alarms can do is that the stored
@@ -17,6 +18,10 @@ _Static_assert(sizeof(Alarm) == 6,
                "PK_ALARMS is an unversioned Alarm array whose only validation is "
                "length % sizeof(Alarm) == 0 -- changing Alarm's size silently "
                "misreads existing blobs. Add a migration for PK_ALARMS.");
+// skip_day sits exactly where <= 1.4.1 kept `bool skip_next` and its padding
+// byte, which is what lets ac_expire_skips recognise and clear a legacy value.
+_Static_assert(offsetof(Alarm, skip_day) == 4,
+               "Alarm.skip_day must overlay the old skip_next byte + padding");
 
 // Config and RunState are each persisted whole under one key, so both must stay
 // inside PebbleOS's 256-byte per-key cap -- the same limit NightBlob already

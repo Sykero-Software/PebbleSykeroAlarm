@@ -12,7 +12,7 @@
 #define PK_NIGHTS    4
 // The AlarmSet string that produced the alarms currently in store. Compared
 // against every inbound AlarmSet so an unchanged resend is a true no-op and does
-// not revert the watch's own enabled/skip_next toggles -- see
+// not revert the watch's own enabled/skip_day toggles -- see
 // ac_apply_set_if_changed for the full reasoning.
 #define PK_ALARMSET  5
 

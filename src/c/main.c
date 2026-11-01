@@ -260,6 +260,7 @@ static void menu_win_disappear(Window *w) {
 }
 
 static void reload_and_rearm(void) {
+  ac_expire_skips(s_alarms, s_count, time(NULL));   // a past skip is inert; tidy it
   as_save_alarms(s_alarms, s_count);
   as_save_runstate(&s_rs);
   sc_rearm(s_alarms, s_count, &s_cfg, &s_rs, time(NULL), s_ringing);
@@ -534,7 +535,7 @@ static void list_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
   fmt_weekdays(a->weekday_mask, days, sizeof(days));
   fmt_delta(next_armed_occurrence(ci->row), time(NULL), delta, sizeof(delta));
   // The state, in words, in ONE place. The relative time already accounts for a
-  // pending skip (ac_next_occurrence honours skip_next), so the row used to be
+  // pending skip (ac_next_occurrence honours skip_day), so the row used to be
   // correct and unexplained: the number jumped a day and only a corner marker
   // said why.
   if ((int)ci->row == snoozed_slot()) {
@@ -547,7 +548,7 @@ static void list_draw_row(GContext *gctx, const Layer *cell, MenuIndex *ci, void
   } else {
     if (!a->enabled) {
       snprintf(state, sizeof(state), "off");
-    } else if (a->skip_next) {
+    } else if (ac_skip_pending(a, time(NULL))) {
       snprintf(state, sizeof(state), "skip, in %s", delta);
     } else {
       snprintf(state, sizeof(state), "in %s", delta);
@@ -610,7 +611,7 @@ static void fmt_occurrence(time_t t, char *out, size_t n) {
 }
 
 // The occurrence a skip would apply to, or that an undo would restore. `undo`
-// asks with skip_next cleared, which is the occurrence currently being skipped.
+// asks with skip_day cleared, which is the occurrence currently being skipped.
 // Both go through the same picker the list and the scheduler use, so the label
 // can never name a ring that will not happen.
 static time_t act_occurrence(int slot, bool undo) {
@@ -621,7 +622,7 @@ static time_t act_occurrence(int slot, bool undo) {
     return next_armed_occurrence(slot);
   }
   Alarm probe = s_alarms[slot];
-  probe.skip_next = false;
+  probe.skip_day = 0;
   time_t now = time(NULL);
   int served = (s_rs.served_slot == (int8_t)slot) ? 0 : -1;
   time_t when = 0;
@@ -667,11 +668,20 @@ static void act_select(MenuLayer *ml, MenuIndex *ci, void *ctx) {
   }
   Alarm *a = &s_alarms[slot];
   switch (s_act_actions[ci->row]) {
-    case AC_ACTION_SKIP_NEXT: a->skip_next = true;  break;
-    case AC_ACTION_RING_NEXT: a->skip_next = false; break;
+    case AC_ACTION_SKIP_NEXT: {
+      // Pin the skip to the very occurrence the label named ("Skip Mon 07:50"):
+      // the next one the scheduler would arm. A day, not a "next" flag -- see
+      // Alarm.skip_day for the bug the relative flag was.
+      time_t occ = act_occurrence(slot, false);
+      if (occ != 0) {
+        a->skip_day = ac_local_day(occ);
+      }
+      break;
+    }
+    case AC_ACTION_RING_NEXT: a->skip_day = 0; break;
     case AC_ACTION_TURN_OFF:
       a->enabled = false;
-      a->skip_next = false;   // an alarm that is off has nothing to skip
+      a->skip_day = 0;   // an alarm that is off has nothing to skip
       break;
     case AC_ACTION_TURN_ON:   a->enabled = true;    break;
   }
@@ -705,7 +715,8 @@ static void open_alarm_actions(int row) {
   }
   s_act_minute = s_alarms[row].minute_of_day;
   s_act_mask = s_alarms[row].weekday_mask;
-  s_act_count = ac_row_actions(&s_alarms[row], s_act_actions, AC_MAX_ACTIONS);
+  s_act_count = ac_row_actions(&s_alarms[row], time(NULL), s_act_actions,
+                               AC_MAX_ACTIONS);
 
   char days[12];
   fmt_weekdays(s_act_mask, days, sizeof(days));
@@ -1028,7 +1039,7 @@ static void add_test_alarm(void) {
     .minute_of_day = (uint16_t)(tm->tm_hour * 60 + tm->tm_min),
     .weekday_mask = 0,        // one-time
     .enabled = true,
-    .skip_next = false,
+    .skip_day = 0,
   };
   int slot = -1;
   for (int i = 0; i < s_count; i++) {
@@ -1489,9 +1500,8 @@ static void ring_stop_now(void) {
     if (s_alarms[slot].weekday_mask == 0) {
       s_alarms[slot].enabled = false;      // a one-time alarm fires once
     }
-    if (s_alarms[slot].skip_next) {
-      s_alarms[slot].skip_next = false;    // the skip has been consumed
-    }
+    // No skip to consume: skip_day names a calendar day, a ring can never be
+    // the skipped occurrence, and a skip of a LATER day must survive this one.
   }
   // The cycle is over: clear all five cycle fields together (see
   // runstate_end_cycle). Clearing deadline_at here is what stops yesterday's
@@ -2410,9 +2420,7 @@ static void wait_cancel_now(int slot, time_t deadline) {
     if (s_alarms[slot].weekday_mask == 0) {
       s_alarms[slot].enabled = false;    // a one-time alarm is spent either way
     }
-    if (s_alarms[slot].skip_next) {
-      s_alarms[slot].skip_next = false;  // the skip has been consumed
-    }
+    // skip_day is left alone, as in ring_stop_now: it names a day, not "next".
     if (deadline != 0) {
       s_rs.served_slot = (int8_t)slot;
       s_rs.served_at = (uint32_t)deadline;
@@ -2718,7 +2726,7 @@ static void poll_cb(void *data) {
     if (s_rs.window_started_at != 0) {
       Alarm probe = s_alarms[slot];
       probe.enabled = true;
-      probe.skip_next = false;
+      probe.skip_day = 0;
       set_time = ac_next_occurrence(&probe, (time_t)s_rs.window_started_at - 1);
     }
     if (set_time != 0 && now + AC_SERVED_TOLERANCE_S >= set_time) {
@@ -3039,6 +3047,13 @@ int main(void) {
   as_load_config(&s_cfg);
   as_load_runstate(&s_rs);
   as_load_alarms(s_alarms, &s_count);
+  // Before anything computes an occurrence: a blob written by <= 1.4.1 holds a
+  // bool skip_next (and a padding byte) where skip_day now lives, which reads as
+  // a 1970 day or a far-future one. Both are cleared here, so an upgrade also
+  // releases an alarm the old relative skip had silenced indefinitely.
+  if (ac_expire_skips(s_alarms, s_count, time(NULL))) {
+    as_save_alarms(s_alarms, s_count);
+  }
   // Must be loaded before app_message_open/request_config below, since the phone's
   // reply can arrive as soon as the outbox flushes and this is what makes an
   // unchanged reply a no-op. Left "" on a fresh install (and on an install that

@@ -235,7 +235,7 @@ static void prv_dump_alarm(int i) {
   const Alarm *al = &s_alarms[i];
   Alarm probe = *al;
   probe.enabled = true;      // ac_next_occurrence returns 0 for a disabled slot
-  probe.skip_next = false;   // ... and skips one for skip_next; want the raw grid
+  probe.skip_day = 0;        // ... and skips one for skip_day; want the raw grid
   time_t next = ac_next_occurrence(&probe, now);
   // ac_next_occurrence(probe, now - 25 h) is the wrong spelling here and used to
   // be what this line said: it returns the FIRST occurrence after that base, so
@@ -245,8 +245,8 @@ static void prv_dump_alarm(int i) {
   time_t prev = ac_last_past_occurrence(&probe, now, now - 25 * SECONDS_PER_HOUR);
   char a[20], b[20];
   APP_LOG(APP_LOG_LEVEL_INFO,
-          "DBG a%d en=%d skip=%d %02u:%02u mask=%02x prev=%s next=%s",
-          i, (int)al->enabled, (int)al->skip_next,
+          "DBG a%d en=%d skip=%u %02u:%02u mask=%02x prev=%s next=%s",
+          i, (int)al->enabled, (unsigned)al->skip_day,
           (unsigned)(al->minute_of_day / 60), (unsigned)(al->minute_of_day % 60),
           (unsigned)al->weekday_mask,
           prv_fmt_t(prev, a, sizeof a), prv_fmt_t(next, b, sizeof b));
@@ -507,7 +507,7 @@ void dbg_dump(const Alarm *alarms, int count, const Config *cfg,
     Alarm probe = alarms[i];
     bool was_enabled = probe.enabled;
     probe.enabled = true;
-    probe.skip_next = false;
+    probe.skip_day = 0;
     // "The last occurrence still in the past" -- NOT ac_next_occurrence from a
     // now-25h base, which picked the wrong alarm on the first real dump. This
     // used to be an open-coded walk here; it is shared and host-tested now,

@@ -38,13 +38,45 @@
 
 // One alarm slot. weekday_mask bit0=Monday … bit6=Sunday; 0 means a one-time
 // alarm (fires at the next occurrence of minute_of_day, then is disabled by the
-// caller). skip_next makes the *next* occurrence be skipped exactly once.
+// caller).
+//
+// skip_day names the ONE occurrence the user chose to skip, as the local calendar
+// day it falls on (ac_local_day), 0 for none. It is absolute on purpose. It used
+// to be `bool skip_next`, meaning "skip the next occurrence after now" -- relative
+// to whenever it was asked -- and only a ring could clear it. A skipped
+// occurrence never rings, so nothing ever cleared it: once the skipped morning
+// had passed, "the next occurrence" was the following morning, and that was
+// skipped too, and so on every day, until the user noticed the alarm had gone
+// silent (a real wrist, 2026-10). A day number cannot drift: once that day is
+// past it matches nothing, and ac_expire_skips tidies it away.
+//
+// Same 6-byte layout as before (uint16_t at offset 4 replaces the bool and its
+// padding byte), so PK_ALARMS keeps its format; a legacy bool reads as a day in
+// 1970, or a garbage far-future one, and ac_expire_skips clears both on load.
 typedef struct {
   uint16_t minute_of_day;   // 0..1439
   uint8_t  weekday_mask;
   bool     enabled;
-  bool     skip_next;
+  uint16_t skip_day;        // ac_local_day of the skipped occurrence, 0 = none
 } Alarm;
+
+// Days since 1970-01-01 of the LOCAL calendar date `t` falls on. Built from
+// localtime's calendar fields only (not tm_yday, not a tz offset), so it agrees
+// with the dates prv_occurrence_on builds occurrences from.
+uint16_t ac_local_day(time_t t);
+
+// True when `a` has a skip that still lies ahead: the occurrence on skip_day is
+// after `now`. Drives the list's "skip, in ..." wording and which action the row
+// submenu offers.
+bool ac_skip_pending(const Alarm *a, time_t now);
+
+// Clears every skip_day that can no longer matter: one more than a day in the
+// past (the margin keeps a skipped occurrence invisible to the wakeup
+// dispatcher's look-back, up to a RING_FROM window plus tolerance, even across
+// midnight), or implausibly far ahead (a skip only ever names an occurrence
+// within the next couple of weeks; anything beyond is a misread legacy blob).
+// Returns true when anything changed.
+bool ac_expire_skips(Alarm *alarms, int count, time_t now);
 
 // Next time this alarm fires, strictly after `now`, in local wall-clock terms.
 // Returns 0 if it never fires (disabled).
@@ -76,7 +108,7 @@ time_t ac_next_occurrence(const Alarm *a, time_t now);
 // `now` itself counts as past: at the ring instant the occurrence in hand is the
 // one ringing, not yesterday's. `search_from` after `now` yields 0.
 //
-// Disabled/skip_next are honoured as ac_next_occurrence honours them, so a
+// Disabled/skip_day are honoured as ac_next_occurrence honours them, so a
 // caller that wants the raw grid regardless of those two (both dump sites do)
 // passes a probe copy with them forced, exactly as it would for ac_next_occurrence.
 time_t ac_last_past_occurrence(const Alarm *a, time_t now, time_t search_from);
@@ -195,8 +227,8 @@ int ac_prune_spent_one_time(Alarm *alarms, int count, bool *missed,
 // menu that offers an action the alarm is already in cannot be told from a broken
 // button.
 typedef enum {
-  AC_ACTION_SKIP_NEXT = 0,   // set skip_next   -- "Skip Mon 07:50"
-  AC_ACTION_RING_NEXT,       // clear skip_next -- "Ring Mon 07:50"
+  AC_ACTION_SKIP_NEXT = 0,   // set skip_day    -- "Skip Mon 07:50"
+  AC_ACTION_RING_NEXT,       // clear skip_day  -- "Ring Mon 07:50"
   AC_ACTION_TURN_OFF,        // enabled = false -- "Turn off"
   AC_ACTION_TURN_ON,         // enabled = true  -- "Turn on"
 } AcAction;
@@ -205,7 +237,7 @@ typedef enum {
 
 // Writes the actions for `a` into out[0..max) and returns how many. Returns 0 on a
 // NULL argument or max < 1 rather than assuming there is room.
-int ac_row_actions(const Alarm *a, AcAction *out, int max);
+int ac_row_actions(const Alarm *a, time_t now, AcAction *out, int max);
 
 // Parse the packed AlarmSet wire format into out[]:
 //     "07:00|1111100;-08:30|0000011"
@@ -222,11 +254,11 @@ int ac_parse_set(const char *s, Alarm *out, int max);
 // out[]/count were replaced, false when the resend was a no-op.
 //
 // This is the invariant it exists to hold: A CONFIG RESEND THAT CHANGES NOTHING
-// MUST NOT CHANGE ANYTHING. `enabled` and `skip_next` are watch-mutable BY DESIGN
+// MUST NOT CHANGE ANYTHING. `enabled` and `skip_day` are watch-mutable BY DESIGN
 // -- SELECT toggles an alarm on/off, long SELECT skips its next occurrence, and
 // ring_stop_now disables a fired one-time alarm -- and none of that is ever sent
 // back to the phone. But ac_parse_set rebuilds every slot from `{0}` with
-// `enabled` taken from the phone's saved '-' bit and `skip_next` forced to false,
+// `enabled` taken from the phone's saved '-' bit and `skip_day` forced to 0,
 // so re-parsing an unchanged string silently reverts all three. That was harmless
 // while the phone's dict only arrived on an explicit Save; it is not harmless now
 // that the watch asks for its config on EVERY launch, because dst_check (on by

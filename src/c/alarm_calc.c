@@ -52,10 +52,63 @@ static time_t prv_occurrence_on(time_t now, int day_offset, uint16_t minute_of_d
   return t;
 }
 
-// n-th (1-based) occurrence strictly after `now`.
+// Days from 1970-01-01 to the civil date y-m-d (proleptic Gregorian; Howard
+// Hinnant's days_from_civil). Pure arithmetic: no tm_yday, no tz offset.
+static int32_t prv_days_from_civil(int y, int m, int d) {
+  y -= m <= 2;
+  const int32_t era = (y >= 0 ? y : y - 399) / 400;
+  const int32_t yoe = y - era * 400;
+  const int32_t doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const int32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + doe - 719468;
+}
+
+uint16_t ac_local_day(time_t t) {
+  struct tm tm = *localtime(&t);
+  int32_t d = prv_days_from_civil(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+  return (d > 0 && d <= 0xFFFF) ? (uint16_t)d : 0;
+}
+
+// The skip horizon: a skip names the next occurrence the scheduler would arm,
+// which for a weekly pattern is at most 7 days out (8 when today's already rang
+// early). Twice that is slack; anything further is not a real skip.
+#define AC_SKIP_MAX_AHEAD_DAYS 15
+
+bool ac_skip_pending(const Alarm *a, time_t now) {
+  if (a == NULL || !a->enabled || a->skip_day == 0) {
+    return false;
+  }
+  const int32_t ahead = (int32_t)a->skip_day - (int32_t)ac_local_day(now);
+  if (ahead < 0 || ahead > AC_SKIP_MAX_AHEAD_DAYS) {
+    return false;
+  }
+  return prv_occurrence_on(now, (int)ahead, a->minute_of_day) > now;
+}
+
+bool ac_expire_skips(Alarm *alarms, int count, time_t now) {
+  if (alarms == NULL) {
+    return false;
+  }
+  const int32_t today = (int32_t)ac_local_day(now);
+  bool changed = false;
+  for (int i = 0; i < count && i < MAX_ALARMS; i++) {
+    if (alarms[i].skip_day == 0) {
+      continue;
+    }
+    const int32_t rel = (int32_t)alarms[i].skip_day - today;
+    if (rel < -1 || rel > AC_SKIP_MAX_AHEAD_DAYS) {
+      alarms[i].skip_day = 0;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// n-th (1-based) occurrence strictly after `now`, never the one on skip_day.
 static time_t prv_nth_occurrence(const Alarm *a, time_t now, int n) {
   int found = 0;
-  // 15 days covers any weekly pattern twice over, which is enough for n <= 2.
+  // 15 days covers any weekly pattern twice over, which is enough for n <= 2
+  // even with one occurrence skipped.
   for (int off = 0; off <= 15; off++) {
     time_t cand = prv_occurrence_on(now, off, a->minute_of_day);
     if (cand <= now) {
@@ -66,6 +119,9 @@ static time_t prv_nth_occurrence(const Alarm *a, time_t now, int n) {
       if ((a->weekday_mask & (1 << prv_bit_for_wday(tm.tm_wday))) == 0) {
         continue;
       }
+    }
+    if (a->skip_day != 0 && ac_local_day(cand) == a->skip_day) {
+      continue;   // the one occurrence the user skipped
     }
     if (++found == n) {
       return cand;
@@ -78,7 +134,7 @@ time_t ac_next_occurrence(const Alarm *a, time_t now) {
   if (a == NULL || !a->enabled) {
     return 0;
   }
-  return prv_nth_occurrence(a, now, a->skip_next ? 2 : 1);
+  return prv_nth_occurrence(a, now, 1);
 }
 
 time_t ac_last_past_occurrence(const Alarm *a, time_t now, time_t search_from) {
@@ -191,7 +247,7 @@ int ac_next_alarm_unserved(const Alarm *alarms, int count, time_t now,
   return -1;
 }
 
-int ac_row_actions(const Alarm *a, AcAction *out, int max) {
+int ac_row_actions(const Alarm *a, time_t now, AcAction *out, int max) {
   if (a == NULL || out == NULL || max < 1) {
     return 0;
   }
@@ -201,10 +257,10 @@ int ac_row_actions(const Alarm *a, AcAction *out, int max) {
     return n;
   }
   // A one-time alarm has exactly one occurrence, so "skip the next one" would
-  // silently move it a day (prv_nth_occurrence(n=2) on a mask-0 alarm returns the
-  // same time tomorrow). Turning it off is the honest action.
+  // silently move it a day (skipping today's leaves the same time tomorrow).
+  // Turning it off is the honest action.
   if (a->weekday_mask != 0 && max >= 2) {
-    out[n++] = a->skip_next ? AC_ACTION_RING_NEXT : AC_ACTION_SKIP_NEXT;
+    out[n++] = ac_skip_pending(a, now) ? AC_ACTION_RING_NEXT : AC_ACTION_SKIP_NEXT;
   }
   if (n < max) {
     out[n++] = AC_ACTION_TURN_OFF;
@@ -556,7 +612,7 @@ static AcWindowDecision prv_window_wakeup(
   // window resolves `when` to tomorrow's occurrence (today's T is already in the
   // past) -- validating the stored deadline against that discarded the live
   // window and lost the day's alarm entirely. The stored window start is what
-  // identifies the occurrence the cycle is about. Probed with enabled/skip_next
+  // identifies the occurrence the cycle is about. Probed with enabled/skip_day
   // FORCED, so this asks about the alarm's grid, not about its current on/off
   // state (a cycle for an alarm the user disabled mid-window must keep its
   // previous behaviour, not be discarded by this guard).
@@ -570,7 +626,7 @@ static AcWindowDecision prv_window_wakeup(
   // and is what ends it.
   time_t cycle_deadline = 0;
   // ...and, from the SAME search base, the same occurrence as the alarm ACTUALLY
-  // IS NOW -- enabled and skip_next honoured. That is what a restart may be
+  // IS NOW -- enabled and skip_day honoured. That is what a restart may be
   // derived from (`basis` below); the forced probe above may not be. The force
   // exists only to answer "does the stored deadline fit this alarm's grid", and
   // using its answer to open a NEW window would ring an alarm the user has
@@ -584,7 +640,7 @@ static AcWindowDecision prv_window_wakeup(
     const time_t base = (time_t)window_started_at - 1;
     Alarm probe = alarms[slot];
     probe.enabled = true;
-    probe.skip_next = false;
+    probe.skip_day = 0;
     const time_t cycle_when = ac_next_occurrence(&probe, base);
     if (cycle_when != 0) {
       cycle_deadline = ac_ring_deadline(semantics, smart_window_active,
