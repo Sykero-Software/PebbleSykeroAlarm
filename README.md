@@ -58,6 +58,35 @@ drawn from a real recorded night rather than from illustrative data.
 - Platforms: **basalt, diorite, emery, flint**. aplite has no Health API for the smart
   alarm to read; chalk's round display clips the left edge of every screen this app draws.
 
+## Development with JailBee
+
+This project is developed extensively using [JailBee](https://jailbee.gisgro.io/)
+for isolated development environments. With JailBee and its Linux/Incus
+prerequisites installed, run from this repository on the **host**:
+
+```sh
+jailbee init
+jailbee base build          # one-time toolchain image; rebuild after SDK changes
+jailbee new dev
+jailbee shell dev
+```
+
+Inside the container:
+
+```sh
+npm ci
+pebble build
+```
+
+The committed [configuration](.jailbee/config.yaml) and
+[installer](.jailbee/install.d/45-pebble-sdk.sh) provide Node.js 24,
+pebble-tool 5.1.2, Pebble SDK 4.44 and a headless emulator; no parent
+repository is required. Building the image installs the SDK under the
+[Pebble developer terms](https://developer.repebble.com/legal/sdk-license/index.html).
+Keep personal agent/IDE settings and credentials in JailBee's host-local config.
+Commit inside the container, then run `jailbee git pull dev` on the host;
+publish from the host, not the container.
+
 ## Building & running
 
 ```sh
